@@ -13,10 +13,22 @@
   },
   "dependencies": {
     "@shop/logger": "*",
+    "@shop/types": "*",
+    "@shop/utils": "*",
+    "argon2": "^0.45.1",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "jose": "^6.2.13",
+    "libphonenumber-js": "^1.13.15",
     "pg": "^8.23.1",
     "pg-hstore": "^2.3.4",
+    "redis": "^6.3.0",
     "sequelize": "^6.37.8",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6"
   }
 }

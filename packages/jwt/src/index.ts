@@ -1,6 +1,6 @@
 import { errors, jwtVerify, createRemoteJWKSet, type JWTPayload } from "jose";
 
-export type TokenClaims = JWTPayload & { sub: string };
+export type TokenClaims = JWTPayload & { sub: string; jti: string };
 
 export type VerifyResult =
   | { ok: true; claims: TokenClaims; error: null }
@@ -63,6 +63,14 @@ export function createTokenVerifier(
             ok: false,
             reason: "invalid_token",
             error: new Error('token has no usable "sub" claim'),
+          };
+        }
+
+        if (typeof payload.jti !== "string" || !payload.jti.length) {
+          return {
+            ok: false,
+            reason: "invalid_token",
+            error: new Error('token has no usable "jti" claim'),
           };
         }
 

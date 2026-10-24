@@ -39,6 +39,7 @@ export async function bootstrap() {
     timeoutMs: 10 * 1000,
   });
 
+  // load public keys on startup
   await jwtVerifier.warmUp();
 
   // setup middlewares
@@ -49,7 +50,11 @@ export async function bootstrap() {
     60 * 1000,
   );
   const globalErrorMiddleware = createErrorMiddleware(logger);
-  const authMiddleware = createAuthMiddleware(logger, jwtVerifier);
+  const authMiddleware = createAuthMiddleware(
+    logger,
+    jwtVerifier,
+    redisCacheAdapter,
+  );
   const proxyErrorHandler = createProxyErrorHandler(logger);
 
   // setup proxies

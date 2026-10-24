@@ -1,5 +1,5 @@
 services:
-  postgres:
+  auth-postgres:
     image: postgres:18
     restart: unless-stopped
     environment:
@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ecommerce-auth-db
     volumes:
-      - auth_postgres_data:/var/lib/postgresql/data
+      - auth_postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -26,6 +26,44 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+    restart: unless-stopped
+
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    mem_limit: 512m
+    ports:
+      - 3001:3001
+    environment:
+      PORT: 3001
+      SERVICE_NAME: auth
+      LOG_LEVEL: info
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://postgres:postgres@auth-postgres:5432/ecommerce-auth-db
+      JWT_ISSUER: http://auth:3001
+      JWT_AUDIENCE: shop-api
+      ACCESS_TOKEN_TTL_SECONDS: 900
+      JWT_PRIVATE_KEY_BASE64: ${JWT_PRIVATE_KEY_BASE64:?generate one, see README}
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    stop_grace_period: 20s
+    init: true
     restart: unless-stopped
 
   gateway:
@@ -49,6 +87,8 @@ services:
       JWT_AUDIENCE: shop-api
     depends_on:
       redis:
+        condition: service_healthy
+      auth:
         condition: service_healthy
     healthcheck:
       test:

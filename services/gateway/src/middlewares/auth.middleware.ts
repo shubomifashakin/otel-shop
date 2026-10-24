@@ -2,10 +2,13 @@ import { RequestHandler } from "express";
 
 import { LoggerPort } from "@shop/logger";
 import { TokenVerifierPort } from "@shop/jwt";
+import { generateBlacklistKey } from "@shop/utils";
+import { CachePort } from "../infrastructure/ports/index.js";
 
 export function createAuthMiddleware(
   logger: LoggerPort,
   tokenVerifier: TokenVerifierPort,
+  cacheService: CachePort,
 ): RequestHandler {
   return async (req, res, next) => {
     const accessToken = req.cookies?.["access_token"];
@@ -35,6 +38,23 @@ export function createAuthMiddleware(
       res.status(401).json({ message: "Unauthorized" });
 
       return;
+    }
+
+    const blacklisted = await cacheService.get<string>(
+      generateBlacklistKey(result.claims.jti),
+    );
+
+    if (blacklisted.data) {
+      res.status(401).json({ message: "Unauthorized" });
+
+      return;
+    }
+
+    if (!blacklisted.success) {
+      logger.error(
+        "Failed to check if token was blacklisted",
+        blacklisted.error,
+      );
     }
 
     next();
