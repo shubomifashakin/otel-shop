@@ -1,0 +1,30 @@
+{
+  "name": "@shop/gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "ISC",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@shop/utils": "*",
+    "@shop/jwt": "*",
+    "@shop/logger": "*",
+    "@shop/types": "*",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "http-proxy-middleware": "^4.2.0",
+    "redis": "^6.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6"
+  }
+}

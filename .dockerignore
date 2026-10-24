@@ -1,0 +1,25 @@
+# installed inside the image instead, and host builds may hold binaries for
+# another platform
+node_modules
+**/node_modules
+
+# build output is produced in the builder stage
+dist
+**/dist
+
+# never bake secrets into a layer
+.env
+**/.env
+!**/.env.example
+
+.git
+.github
+.vscode
+
+docker-compose.yml
+**/Dockerfile
+.dockerignore
+
+README.md
+**/*.md
+**/*.log

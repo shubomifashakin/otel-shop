@@ -1,0 +1,27 @@
+{
+  "name": "observability",
+  "version": "1.0.0",
+  "private": true,
+  "license": "ISC",
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11"
+  },
+  "scripts": {
+    "build": "npm run build -w @shop/logger && npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "overrides": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

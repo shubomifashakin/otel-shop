@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecommerce-auth-db
+    volumes:
+      - auth_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:8.4
+    mem_limit: 512m
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    mem_limit: 512m
+    ports:
+      - 3000:3000
+    environment:
+      PORT: 3000
+      SERVICE_NAME: gateway
+      LOG_LEVEL: info
+      REDIS_URL: redis://redis:6379
+      AUTH_SERVICE_URL: http://auth:3001
+      CART_SERVICE_URL: http://cart:3002
+      INVENTORY_SERVICE_URL: http://inventory:3003
+      PAYMENT_SERVICE_URL: http://payment:3004
+      AUTH_JWKS_URL: http://auth:3001/.well-known/jwks.json
+      JWT_ISSUER: http://auth:3001
+      JWT_AUDIENCE: shop-api
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 20s
+    init: true
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  auth_postgres_data:

@@ -1,0 +1,19 @@
+{
+  "name": "@shop/payment",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "ISC",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@shop/logger": "*",
+    "dotenv": "^18.0.9",
+    "zod": "^4.6.7"
+  }
+}
