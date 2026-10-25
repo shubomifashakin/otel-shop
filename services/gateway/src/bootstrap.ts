@@ -18,7 +18,7 @@ import {
   createAuthRouter,
   createPaymentRouter,
   createCartRouter,
-  createInventoryRouter,
+  createProductsRouter,
 } from "./routers/index.js";
 
 export async function bootstrap() {
@@ -67,12 +67,12 @@ export async function bootstrap() {
     on: { error: proxyErrorHandler },
   });
 
-  const inventoryProxy = createProxyMiddleware<Request, Response>({
+  const productsProxy = createProxyMiddleware<Request, Response>({
     logger: logger,
     changeOrigin: true,
     timeout: 120 * 1000,
     proxyTimeout: 30 * 1000,
-    target: parsed.INVENTORY_SERVICE_URL,
+    target: parsed.PRODUCTS_SERVICE_URL,
     on: { error: proxyErrorHandler },
   });
 
@@ -95,7 +95,7 @@ export async function bootstrap() {
   });
 
   const authRouter = createAuthRouter(authProxy);
-  const inventoryRouter = createInventoryRouter(inventoryProxy);
+  const productsRouter = createProductsRouter(productsProxy);
   const cartRouter = createCartRouter(cartProxy, authMiddleware);
   const paymentRouter = createPaymentRouter(paymentProxy, authMiddleware);
 
@@ -106,7 +106,7 @@ export async function bootstrap() {
       { path: "auth", router: authRouter },
       { path: "cart", router: cartRouter },
       { path: "payments", router: paymentRouter },
-      { path: "inventory", router: inventoryRouter },
+      { path: "products", router: productsRouter },
     ],
   });
 

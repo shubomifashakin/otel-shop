@@ -1,5 +1,5 @@
 {
-  "name": "@shop/inventory",
+  "name": "@shop/products",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,13 +7,24 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "seed": "tsx src/database/seed.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@shop/logger": "*",
+    "@shop/types": "*",
+    "@shop/utils": "*",
     "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "pg-hstore": "^2.3.4",
+    "redis": "^6.3.0",
+    "sequelize": "^6.37.8",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
   }
 }

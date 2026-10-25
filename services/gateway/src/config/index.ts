@@ -11,7 +11,7 @@ const config = z.object({
   SERVICE_NAME: z.string().nonempty(),
   AUTH_SERVICE_URL: z.url(),
   CART_SERVICE_URL: z.url(),
-  INVENTORY_SERVICE_URL: z.url(),
+  PRODUCTS_SERVICE_URL: z.url(),
   PAYMENT_SERVICE_URL: z.url(),
   AUTH_JWKS_URL: z.url(),
   JWT_ISSUER: z.string().nonempty(),

@@ -15,6 +15,24 @@ services:
       retries: 5
       start_period: 30s
 
+  products-postgres:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecommerce-products-db
+    volumes:
+      - products_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   redis:
     image: redis:8.4
     mem_limit: 512m
@@ -33,8 +51,6 @@ services:
       context: .
       dockerfile: services/auth/Dockerfile
     mem_limit: 512m
-    ports:
-      - 3001:3001
     environment:
       PORT: 3001
       SERVICE_NAME: auth
@@ -66,6 +82,38 @@ services:
     init: true
     restart: unless-stopped
 
+  products:
+    build:
+      context: .
+      dockerfile: services/products/Dockerfile
+    mem_limit: 512m
+    environment:
+      PORT: 3003
+      SERVICE_NAME: products
+      LOG_LEVEL: info
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://postgres:postgres@products-postgres:5432/ecommerce-products-db
+    depends_on:
+      products-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3003/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    stop_grace_period: 20s
+    init: true
+    restart: unless-stopped
+
   gateway:
     build:
       context: .
@@ -80,7 +128,7 @@ services:
       REDIS_URL: redis://redis:6379
       AUTH_SERVICE_URL: http://auth:3001
       CART_SERVICE_URL: http://cart:3002
-      INVENTORY_SERVICE_URL: http://inventory:3003
+      PRODUCTS_SERVICE_URL: http://products:3003
       PAYMENT_SERVICE_URL: http://payment:3004
       AUTH_JWKS_URL: http://auth:3001/.well-known/jwks.json
       JWT_ISSUER: http://auth:3001
@@ -89,6 +137,8 @@ services:
       redis:
         condition: service_healthy
       auth:
+        condition: service_healthy
+      products:
         condition: service_healthy
     healthcheck:
       test:
@@ -109,3 +159,4 @@ services:
 volumes:
   redis_data:
   auth_postgres_data:
+  products_postgres_data:

@@ -1,6 +1,6 @@
 import { RequestHandler, Router } from "express";
 
-export function createInventoryRouter(proxy: RequestHandler): Router {
+export function createProductsRouter(proxy: RequestHandler): Router {
   const router = Router();
 
   router.use(proxy);

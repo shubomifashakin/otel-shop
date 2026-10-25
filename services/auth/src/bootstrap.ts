@@ -40,7 +40,7 @@ export async function bootstrap() {
   const userModel = registerUserModel(sequelize);
 
   // FIXME: this is not ideal, only did this cus i didnt want to run migrations
-  await sequelize.sync({ force: true });
+  await sequelize.sync();
 
   //  create the repositories
   const userRepository = new UsersRepository(userModel);
