@@ -52,3 +52,9 @@ export class UnprocessableError extends AppError {
     super(422, message);
   }
 }
+
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "Service unavailable") {
+    super(503, message);
+  }
+}
