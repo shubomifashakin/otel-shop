@@ -1,0 +1,154 @@
+### otel-shop — a checkout, end to end
+#
+# Open in VS Code with the REST Client extension and send these in order.
+# Auth lands in an httpOnly cookie, which the extension keeps for you.
+#
+# Everything goes through the gateway. Nothing else is published.
+
+@host = http://localhost:3000
+
+
+### 1. Sign up
+# The password rules are strict: 8+ chars, one lowercase, one uppercase, one
+# symbol. The phone must be a valid international number.
+
+POST {{host}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "reader@example.com",
+  "password": "Observe!123",
+  "firstName": "Ada",
+  "lastName": "Lovelace",
+  "phone": "+2348012345678"
+}
+
+
+### 2. Log in
+# Sets `access_token` as an httpOnly cookie. Every request below relies on it.
+
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "reader@example.com",
+  "password": "Observe!123"
+}
+
+
+### 3. Browse the catalogue
+# Public, no auth. 20 per page, with a `cursor` holding the last id when there
+# is more to fetch.
+
+# @name catalogue
+GET {{host}}/products
+
+
+### 4. Next page
+# Takes the cursor straight from the response above rather than hardcoding it.
+
+GET {{host}}/products?cursor={{catalogue.response.body.$.cursor}}
+
+
+### 5. One product
+# Note the price: minor units, as a string. 172600 is ₦1,726.00.
+
+GET {{host}}/products/2
+
+
+### 6. Add it to the cart
+
+POST {{host}}/cart/items
+Content-Type: application/json
+
+{
+  "productId": 2,
+  "quantity": 3
+}
+
+
+### 7. See the cart
+# Returns the items as a bare array, newest page first with an optional cursor.
+
+GET {{host}}/cart
+
+
+### 8. Change a quantity
+# Replaces the quantity
+
+PATCH {{host}}/cart/items/2
+Content-Type: application/json
+
+{
+  "quantity": 5
+}
+
+
+### 9. Check out
+# No body. The `x-idempotency-key` header is required: send the same key twice
+# and you get the same payment back rather than a second charge.
+# The payment is `pending`, the payment provider reports the outcome to our webhook
+# that is what settles the stock and clears the cart
+# Configure the success rate and callback delay of the payment provider to your taste
+
+POST {{host}}/payments/checkout
+x-idempotency-key: reader-checkout-1
+
+
+### 10. Payment history
+# Poll this after a moment and the status will have moved to `succeeded` or
+# `failed`. The provider fails about 20% of the time.
+
+GET {{host}}/payments
+
+
+### 11. Confirm the cart was cleared
+# Empty array on success. A failed payment leaves the cart alone so you can
+# retry it.
+
+GET {{host}}/cart
+
+
+### Replay an idempotency key
+# Same key as step 9. Returns the original payment rather than charging again,
+# so run this before the out of stock pair below changes what is in the cart.
+
+POST {{host}}/payments/checkout
+x-idempotency-key: reader-checkout-1
+
+
+### Out of stock, part 1: add it
+# Products 1, 11, 21 and so on are seeded with quantity 0. Adding one still
+# succeeds with a 201, the cart only asks products for the name, price and
+# currency, and never checks availability. Stock is not consulted until
+# checkout tries to reserve it.
+
+POST {{host}}/cart/items
+Content-Type: application/json
+
+{
+  "productId": 11,
+  "quantity": 1
+}
+
+
+### Out of stock, part 2: fail the checkout
+# This is where it breaks: reserve runs `WHERE quantity >= ?`, matches nothing,
+# and the checkout comes back 422. A new idempotency key, so it is a fresh
+# attempt rather than a replay of step 9.
+
+POST {{host}}/payments/checkout
+x-idempotency-key: reader-checkout-oos
+
+
+### Log out
+# Revokes the token by `jti` in Redis, so the gateway rejects it even though it
+# has not expired.
+
+POST {{host}}/auth/logout
+
+
+### Unauthorised
+# After logging out, this is a 401.
+
+GET {{host}}/cart

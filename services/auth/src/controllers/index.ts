@@ -27,7 +27,7 @@ export class AuthController {
 
     res.cookie("access_token", dat.accessToken, {
       httpOnly: true,
-      secure: true,
+      secure: false, // FIXME: DO NOT DO THIS IN REAL LIFE
       sameSite: "strict",
       expires: dat.expiresAt,
     });
@@ -50,7 +50,7 @@ export class AuthController {
 
     res.clearCookie("access_token", {
       httpOnly: true,
-      secure: true,
+      secure: false,
       sameSite: "strict",
     });
 

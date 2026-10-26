@@ -58,8 +58,9 @@ services:
       PORT: 4000
       WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET}
       # how long after accepting a charge the outcome is posted back
-      CALLBACK_DELAY_MS: 1500
-      SUCCESS_RATE: 0.8
+      CALLBACK_DELAY_MS: ${CALLBACK_DELAY_MS:-1500}
+      # share of payments that succeed. set 0 to make every payment fail
+      SUCCESS_RATE: ${SUCCESS_RATE:-0.8}
     healthcheck:
       test:
         [
