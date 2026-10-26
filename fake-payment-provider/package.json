@@ -1,0 +1,13 @@
+{
+  "name": "fake-payment-provider",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Stand-in for a third party payment provider",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}

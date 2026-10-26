@@ -33,6 +33,48 @@ services:
       retries: 5
       start_period: 30s
 
+  payment-postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecommerce-payment-db
+    volumes:
+      - payment_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # does not belong in the service grapjh in real world
+  payment-provider:
+    build:
+      context: ./fake-payment-provider
+    mem_limit: 256m
+    environment:
+      PORT: 4000
+      WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET}
+      # how long after accepting a charge the outcome is posted back
+      CALLBACK_DELAY_MS: 1500
+      SUCCESS_RATE: 0.8
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    init: true
+    restart: unless-stopped
+
   redis:
     image: redis:8.4
     mem_limit: 512m
@@ -45,6 +87,53 @@ services:
       retries: 5
       start_period: 5s
     restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.4.0
+    mem_limit: 1g
+    ports:
+      - 29092:29092
+    environment:
+      KAFKA_NODE_ID: 1 # the id of the node
+      KAFKA_PROCESS_ROLES: broker,controller # this node acts as a broker and controller
+      CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093 # the controllers that can participate in voting
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER # controllers should use the line called CONTROLLER to communicate with each other
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL # brokers should use the line called INTERNAL to communicate with each other
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,HOST://:29092 # the port used by each line
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT # the protocol enforced by each line
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1 # how many brokers should store the consumer offsets topic
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1 # how many brokers should store kafkas transaction metadata
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1 # how many replicas must ack a transaction log write
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false" # reject a write to an unknown topic
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0 # how long Kafka waits for additional consumers to join a new consumer group before the first partition assignment
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # creates the required kafka topics (payment success and failed)
+  kafka-init:
+    image: apache/kafka:4.4.0
+    command: >
+      sh -c "
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic payment.succeeded --partitions 3 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic payment.failed --partitions 3 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+      "
+    depends_on:
+      kafka:
+        condition: service_healthy
+    init: true
+    restart: "no"
 
   auth:
     build:
@@ -93,10 +182,17 @@ services:
       LOG_LEVEL: info
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgres://postgres:postgres@products-postgres:5432/ecommerce-products-db
+      # must match payment's, which is why all three read the same variable
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       products-postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      kafka:
         condition: service_healthy
     healthcheck:
       test:
@@ -128,12 +224,19 @@ services:
       AUTH_JWKS_URL: http://auth:3001/.well-known/jwks.json
       JWT_ISSUER: http://auth:3001
       JWT_AUDIENCE: shop-api
+      # must match payment's, which is why both read the same variable
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       redis:
         condition: service_healthy
       auth:
         condition: service_healthy
       products:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      kafka:
         condition: service_healthy
     healthcheck:
       test:
@@ -142,6 +245,60 @@ services:
           "node",
           "-e",
           "fetch('http://127.0.0.1:3002/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    stop_grace_period: 20s
+    init: true
+    restart: unless-stopped
+
+  payment:
+    build:
+      context: .
+      dockerfile: services/payment/Dockerfile
+    mem_limit: 512m
+    environment:
+      PORT: 3004
+      SERVICE_NAME: payment
+      LOG_LEVEL: info
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://postgres:postgres@payment-postgres:5432/ecommerce-payment-db
+      PRODUCTS_SERVICE_URL: http://products:3003
+      CART_SERVICE_URL: http://cart:3002
+      AUTH_JWKS_URL: http://auth:3001/.well-known/jwks.json
+      JWT_ISSUER: http://auth:3001
+      JWT_AUDIENCE: shop-api
+      PAYMENT_PROVIDER_URL: http://payment-provider:4000
+      PAYMENT_CALLBACK_URL: http://payment:3004/webhooks/payments
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      payment-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      products:
+        condition: service_healthy
+      cart:
+        condition: service_healthy
+      payment-provider:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3004/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 10s
       timeout: 3s
@@ -179,6 +336,8 @@ services:
         condition: service_healthy
       cart:
         condition: service_healthy
+      payment:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -199,3 +358,4 @@ volumes:
   redis_data:
   auth_postgres_data:
   products_postgres_data:
+  payment_postgres_data:

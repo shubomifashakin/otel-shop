@@ -13,6 +13,8 @@ const config = z.object({
   AUTH_JWKS_URL: z.url(),
   JWT_ISSUER: z.string().nonempty(),
   JWT_AUDIENCE: z.string().nonempty(),
+  INTERNAL_API_TOKEN: z.string().min(16),
+  KAFKA_BROKERS: z.string().nonempty(),
 });
 
 export const parsed = config.parse(process.env);

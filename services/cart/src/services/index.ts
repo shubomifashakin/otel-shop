@@ -159,6 +159,10 @@ export class CartService {
     }
   }
 
+  async getAllItems(userId: string): Promise<CartItem[]> {
+    return this.read(userId);
+  }
+
   async getItems(userId: string, cursor?: number) {
     const items = await this.read(userId);
 

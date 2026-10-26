@@ -1,7 +1,7 @@
 import { bootstrap } from "./bootstrap.js";
 import { makeError } from "@shop/utils";
 
-const { app, config, logger, redis } = await bootstrap();
+const { app, config, logger, redis, paymentsConsumer } = await bootstrap();
 
 const server = app.listen(config.PORT, () => {
   logger.info(`Listening on port ${config.PORT}`);
@@ -37,6 +37,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       server.close((err) => (err ? reject(err) : resolve()));
     });
 
+    await paymentsConsumer.disconnect();
     await redis.close();
 
     clearTimeout(forceExit);

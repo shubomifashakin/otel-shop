@@ -20,3 +20,14 @@ export const cartQueryValidator = z.object({
 });
 
 export type cartQueryDto = z.infer<typeof cartQueryValidator>;
+
+export const paymentOutcomeEventValidator = z.object({
+  eventId: z.string().nonempty(),
+  paymentId: z.string().nonempty(),
+  userId: z.string().nonempty(),
+  idempotencyKey: z.string().nonempty().max(255),
+});
+
+export type paymentOutcomeEventDto = z.infer<
+  typeof paymentOutcomeEventValidator
+>;

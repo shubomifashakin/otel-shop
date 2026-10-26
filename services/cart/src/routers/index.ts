@@ -1,3 +1,5 @@
+export * from "./internal.router.js";
+
 import { RequestHandler, Router } from "express";
 import { CartController } from "../controllers/index.js";
 

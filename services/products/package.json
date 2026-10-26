@@ -13,11 +13,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@shop/events": "*",
+    "@shop/http": "*",
     "@shop/logger": "*",
     "@shop/types": "*",
     "@shop/utils": "*",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
+    "kafkajs": "^2.2.4",
     "pg": "^8.23.1",
     "pg-hstore": "^2.3.4",
     "redis": "^6.3.0",

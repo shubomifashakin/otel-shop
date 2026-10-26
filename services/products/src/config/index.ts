@@ -10,6 +10,8 @@ const config = z.object({
   LOG_LEVEL: z.enum(["info", "debug", "warn", "error"]).default("info"),
   SERVICE_NAME: z.string().nonempty(),
   DATABASE_URL: z.url(),
+  INTERNAL_API_TOKEN: z.string().min(16),
+  KAFKA_BROKERS: z.string().nonempty(),
 });
 
 export const parsed = config.parse(process.env);

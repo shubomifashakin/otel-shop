@@ -1,3 +1,5 @@
+export * from "./stock-reservations.js";
+
 import {
   Model,
   DataTypes,
