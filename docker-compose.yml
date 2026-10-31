@@ -355,8 +355,129 @@ services:
     init: true
     restart: unless-stopped
 
+    # OBSERVABILITY BACKENDS
+    # Alloy serves as our otel collector. Where all telemetry data is sent
+    # Uses the alloy default engine
+  alloy:
+    image: grafana/alloy:v1.21.2
+    restart: unless-stopped
+    mem_limit: 1g
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+    command: >
+      run
+      --server.http.listen-addr=0.0.0.0:12345
+      --storage.path=/var/lib/alloy/data
+      /etc/alloy/config.alloy
+    ports:
+      - 127.0.0.1:12345:12345 # alloy ui
+    volumes:
+      - ./backend_configs/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/12345' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 15s
+    stop_grace_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    restart: unless-stopped
+    mem_limit: 512m
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --enable-feature=exemplar-storage
+      - --web.enable-remote-write-receiver
+      - --web.listen-address=0.0.0.0:9090
+      - --web.enable-otlp-receiver
+    volumes:
+      - ./backend_configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "promtool", "check", "ready"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 15s
+    stop_grace_period: 30s
+
+  loki:
+    image: grafana/loki:3.7.9
+    restart: unless-stopped
+    mem_limit: 1g
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      - "./backend_configs/loki.yml:/etc/loki/config.yml:ro"
+      - loki_data:/loki
+    stop_grace_period: 30s
+
+  tempo:
+    image: grafana/tempo:3.1.1
+    restart: unless-stopped
+    command: "-target=all -config.file=/etc/tempo.yaml"
+    mem_limit: 1g
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    volumes:
+      - ./backend_configs/tempo.yml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    stop_grace_period: 30s
+
+  grafana:
+    image: grafana/grafana:13.2.5
+    restart: unless-stopped
+    ports:
+      - 3005:3000 # grafana ui
+    mem_limit: 1g
+    volumes:
+      - ./backend_configs/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - grafana_data:/var/lib/grafana
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:3000/api/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
+    environment:
+      - GF_SERVER_ROOT_URL=http://localhost:3005/
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_DATABASE_HIGH_AVAILABILITY=false
+
+  # this generates dummy traces, metrics and logs so you can confirm the pipeline
+  # works before any application is instrumented.
+  # see the README for the commands.
+  telemetrygen:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.159.0
+    profiles:
+      - demo
+    depends_on:
+      alloy:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   redis_data:
   auth_postgres_data:
   products_postgres_data:
   payment_postgres_data:
+  prometheus_data:
+  tempo_data:
+  loki_data:
+  alloy_data:
+  grafana_data:

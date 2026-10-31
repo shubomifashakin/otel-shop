@@ -1,0 +1,11 @@
+#  view the configuration here https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 1m
+
+storage:
+  tsdb:
+    retention:
+      time: 14d

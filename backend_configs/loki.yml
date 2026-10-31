@@ -1,0 +1,45 @@
+# view the configuuration here https://grafana.com/docs/loki/latest/reference/loki-config-ref
+
+auth_enabled: false
+
+analytics:
+  reporting_enabled: false
+
+server:
+  http_listen_port: 3100
+  graceful_shutdown_timeout: "20s"
+
+limits_config:
+  retention_period: 14d
+  deletion_mode: disabled
+
+compactor:
+  retention_enabled: true
+  compaction_interval: 5m
+  delete_request_store: filesystem
+
+common:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+  replication_factor: 1
+  path_prefix: /loki
+
+schema_config:
+  configs:
+    - from: 2020-05-15
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  filesystem:
+    directory: /loki/chunks
+
+  tsdb_shipper:
+    active_index_directory: /loki/index
+    cache_location: /loki/index-cache

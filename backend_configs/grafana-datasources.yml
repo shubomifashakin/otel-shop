@@ -1,0 +1,82 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    orgId: 1
+    url: http://prometheus:9090
+    basicAuth: false
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      httpMethod: GET
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    orgId: 1
+    url: http://loki:3100
+    basicAuth: false
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      httpMethod: GET
+      derivedFields:
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: tempo
+          url: "$${__value.raw}"
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    orgId: 1
+    version: 1
+    url: http://tempo:3200
+    access: proxy
+    basicAuth: false
+    editable: false
+    jsonData:
+      httpMethod: GET
+
+      tracesToLogsV2:
+        datasourceUid: "loki"
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        tags:
+          [
+            { key: "job" },
+            { key: "instance" },
+            { key: "service.name", value: "service_name" },
+            { key: "hostname" },
+          ]
+        filterByTraceID: true
+        filterBySpanID: false
+
+      tracesToMetrics:
+        datasourceUid: "prometheus"
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        tags: [{ key: "service.name", value: "service" }, { key: "job" }]
+        queries:
+          - name: "Request rate"
+            query: "sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m]))"
+
+      serviceMap:
+        datasourceUid: "prometheus"
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      streamingEnabled:
+        search: true
+        metrics: true

@@ -5,8 +5,10 @@ observability. It exists to be instrumented, so the interesting parts are the
 seams between services: an HTTP checkout that spans four of them, and a Kafka
 settlement path where a trace has to survive a queue hop.
 
-**There is no instrumentation yet.** That is the point. This branch is the
-application, built so the next stages have something real to observe.
+**The application is not instrumented yet.** That is the point. The services
+are built so the next stage has something real to observe. The observability
+backends are already up and wired together, waiting to receive it — and there
+is a generator below that proves they work before a single span is written.
 
 ## Scope: the services, not the infrastructure
 
@@ -31,9 +33,9 @@ collect.
 | Stage | What                                                                             | State    |
 | ----- | -------------------------------------------------------------------------------- | -------- |
 | 1     | Build the services                                                               | **done** |
-| 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | next     |
-| 3     | Instrument the application                                                       |          |
-| 4     | Sampling — head in the SDK, tail in the collector                                |          |
+| 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done** |
+| 3     | Instrument the application                                                       | next     |
+| 4     | Sampling — head in the application, tail in Alloy                                |          |
 | 5     | Grafana as code — dashboards, contact points, notification policies, alert rules |          |
 
 ## Running it
@@ -68,8 +70,10 @@ Then:
 docker compose up -d --build
 ```
 
-Only the gateway is published, on **3000**. Everything else talks over the
-compose network. Postgres for products is exposed on 5432 for the seed script.
+Three things are published to the host: the gateway on **3000**, Grafana on
+**3005**, and Alloy's own UI on **12345**. Everything
+else talks over the compose network. Postgres for products is exposed on **5432**
+for the seed script.
 
 Seed the catalogue once the stack is healthy:
 
@@ -81,6 +85,74 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/ecommerce-products-db \
 
 That writes 300 deterministic products from a fixed PRNG seed, so everyone
 following along gets the same prices and stock levels.
+
+## The observability stack
+
+Five containers come up alongside the services.
+
+| Container  | Role                                         | Reach it at                           |
+| ---------- | -------------------------------------------- | ------------------------------------- |
+| alloy      | the OTel collector (everything is sent here) | UI on <http://localhost:12345>        |
+| tempo      | traces                                       | via Grafana                           |
+| loki       | logs                                         | via Grafana                           |
+| prometheus | metrics                                      | via Grafana                           |
+| grafana    | where you look at all three                  | <http://localhost:3005> (admin/admin) |
+
+Configuration lives in [`backend_configs/`](./backend_configs), one file each.
+The three datasources are provisioned from
+[`grafana-datasources.yml`](./backend_configs/grafana-datasources.yml), so they
+are connected the moment Grafana starts.
+
+**Everything the services will emit goes to Alloy**, on 4317 (gRPC) or 4318
+(HTTP), and Alloy fans it out: traces to Tempo, logs to Loki, metrics to
+Prometheus. Those two ports are not published to the host, because the services
+that use them run inside the compose network.
+
+### Confirming it works
+
+Since the application isn't instrumented yet, there is nothing to look at. I added
+a generator to confirm the setup works. It's behind a compose profile, so it
+never starts on a normal `up`:
+
+```sh
+# traces
+docker compose --profile demo run --rm telemetrygen traces \
+  --otlp-endpoint alloy:4317 --otlp-insecure --service demo-shop \
+  --traces 5 --child-spans 3
+
+# logs
+docker compose --profile demo run --rm telemetrygen logs \
+  --otlp-endpoint alloy:4317 --otlp-insecure --service demo-shop --logs 5
+
+# metrics
+docker compose --profile demo run --rm telemetrygen metrics \
+  --otlp-endpoint alloy:4317 --otlp-insecure --service demo-shop --metrics 5
+```
+
+- Then open Grafana
+- Login with the username and password (its `admin` unless you changed it to something else)
+- Click on Explore and check each one:
+
+| Datasource | Query                            | Expect                               |
+| ---------- | -------------------------------- | ------------------------------------ |
+| Tempo      | `{}` in the TraceQL tab          | traces rooted at `lets-go`           |
+| Loki       | `{service_name="demo-shop"}`     | log lines reading `the message`      |
+| Prometheus | `gen`                            | the generator's own metric           |
+| Prometheus | `traces_spanmetrics_calls_total` | metrics Tempo derived from the spans |
+
+The last row proves the most: those series only exist if the traces reached Tempo
+**and** Tempo's remote-write reached Prometheus.
+
+To see a log to trace correlation, send a log carrying a real traceId. Copy a traceId from one
+of the tempo results and paste it in this commmand:
+
+```sh
+docker compose --profile demo run --rm telemetrygen logs \
+  --otlp-endpoint alloy:4317 --otlp-insecure --service demo-shop \
+  --logs 2 --trace-id 1576769ba0911ff5ebcdfd1c9032ac6c --body "linked log line"
+```
+
+Find it in Loki, expand the line, there should be a links tab that allows you to jump to the trace in tempo from there.
 
 ## Driving it
 
