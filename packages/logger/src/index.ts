@@ -1,4 +1,5 @@
 import winston, { Logger } from "winston";
+import { OpenTelemetryTransportV3 } from "@opentelemetry/winston-transport";
 
 export type LogProps = Record<string, unknown> | Error;
 
@@ -47,7 +48,11 @@ export function createLogger(
       serviceName,
     },
     level: logLevel,
-    transports: [new winston.transports.Console()],
+    transports: [
+      new winston.transports.Console(),
+      // without this our logs wouldnt be pushed
+      new OpenTelemetryTransportV3(),
+    ],
     format: winston.format.combine(
       winston.format.timestamp(),
       winston.format.errors({ stack: true }),

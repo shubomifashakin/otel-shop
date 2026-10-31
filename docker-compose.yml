@@ -151,6 +151,8 @@ services:
       JWT_AUDIENCE: shop-api
       ACCESS_TOKEN_TTL_SECONDS: 900
       JWT_PRIVATE_KEY_BASE64: ${JWT_PRIVATE_KEY_BASE64:?generate one, see README}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
     depends_on:
       auth-postgres:
         condition: service_healthy
@@ -186,6 +188,8 @@ services:
       # must match payment's, which is why all three read the same variable
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
     depends_on:
       products-postgres:
         condition: service_healthy
@@ -228,6 +232,8 @@ services:
       # must match payment's, which is why both read the same variable
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
     depends_on:
       redis:
         condition: service_healthy
@@ -276,6 +282,8 @@ services:
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
     depends_on:
       payment-postgres:
         condition: service_healthy
@@ -328,6 +336,8 @@ services:
       AUTH_JWKS_URL: http://auth:3001/.well-known/jwks.json
       JWT_ISSUER: http://auth:3001
       JWT_AUDIENCE: shop-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local # you should see this as an attribute/property on your logs, metrics etc
     depends_on:
       redis:
         condition: service_healthy
