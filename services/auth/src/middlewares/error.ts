@@ -2,6 +2,7 @@ import { ErrorRequestHandler } from "express";
 
 import { LoggerPort } from "@shop/logger";
 import { AppError } from "../errors/index.js";
+import { totalErrors } from "../telemetry/index.js";
 
 export function createErrorMiddleware(logger: LoggerPort): ErrorRequestHandler {
   return (error, req, res, _) => {
@@ -18,6 +19,11 @@ export function createErrorMiddleware(logger: LoggerPort): ErrorRequestHandler {
       });
       return;
     }
+
+    totalErrors.add(1, {
+      route: req.route?.path ?? "unmatched",
+      type: error instanceof Error ? error.name : "unknown",
+    });
 
     logger.error("An error occurred", {
       path: req.path,

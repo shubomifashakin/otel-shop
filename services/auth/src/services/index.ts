@@ -9,6 +9,7 @@ import {
 } from "../infrastructure/ports/index.js";
 import { loginDto, signUpDto } from "../validators/index.js";
 import { NotFoundError, UnauthorizedError } from "../errors/index.js";
+import { loginAttempts, passwordHashDuration } from "../telemetry/index.js";
 
 export class AuthService {
   constructor(
@@ -21,6 +22,7 @@ export class AuthService {
   ) {}
 
   async createUser(dto: signUpDto) {
+    const hashStart = performance.now();
     const passwordHash = await this.hasherService.hash(dto.password);
 
     if (!passwordHash.success) {
@@ -31,6 +33,12 @@ export class AuthService {
 
       throw new Error("Failed to hash the password");
     }
+    const hashEnd = performance.now();
+
+    // we divide by 1000 since the result is in milliseconds and prometheus usually expects seconds
+    passwordHashDuration.record((hashEnd - hashStart) / 1000, {
+      operation: "hash",
+    });
 
     await this.userRepo.create({
       email: dto.email,
@@ -47,21 +55,33 @@ export class AuthService {
     const userExists = await this.userRepo.findByEmail(dto.email);
 
     if (!userExists) {
+      loginAttempts.add(1, { outcome: "unknown_user" });
+
       throw new NotFoundError("User does not exist");
     }
 
+    const hashStart = performance.now();
     const valid = await this.hasherService.verify(
       dto.password,
       userExists.passwordHash,
     );
+    const hashEnd = performance.now();
+
+    passwordHashDuration.record((hashEnd - hashStart) / 1000, {
+      operation: "verify",
+    });
 
     if (!valid.success) {
+      loginAttempts.add(1, { outcome: "error" });
+
       this.loggerService.error("Failed to verify password", valid.error);
 
       throw new Error("Failed to verify password");
     }
 
     if (!valid.data) {
+      loginAttempts.add(1, { outcome: "invalid_credentials" });
+
       throw new UnauthorizedError("Invalid credentials");
     }
 
@@ -78,6 +98,9 @@ export class AuthService {
 
       throw new Error("Failed to generate access token");
     }
+
+    loginAttempts.add(1, { outcome: "success" });
+
     return {
       accessToken: accessToken.data.token,
       expiresAt: accessToken.data.expiresAt,
