@@ -59,8 +59,14 @@ services:
       WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET}
       # how long after accepting a charge the outcome is posted back
       CALLBACK_DELAY_MS: ${CALLBACK_DELAY_MS:-1500}
-      # share of payments that succeed. set 0 to make every payment fail
-      SUCCESS_RATE: ${SUCCESS_RATE:-0.8}
+      # how long the provider takes to answer the initialize request.
+      # this is what payment's `payment.initialize` span measures. it must stay
+      # below payment's 10s client timeout
+      INITIALIZE_RESPONSE_DELAY_MS: ${INITIALIZE_RESPONSE_DELAY_MS:-2000}
+      # share of charge requets the provider accepts.
+      INITIALIZE_ACCEPT_RATE: ${INITIALIZE_ACCEPT_RATE:-1}
+      # share of accepted charges that go on to succeed.
+      WEBHOOK_SUCCESS_RATE: ${WEBHOOK_SUCCESS_RATE:-1}
     healthcheck:
       test:
         [

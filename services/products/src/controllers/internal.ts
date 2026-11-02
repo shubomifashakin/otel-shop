@@ -30,4 +30,18 @@ export class InternalStockController {
 
     res.status(200).json({ reserved: true });
   };
+
+  release: RequestHandler = async (req, res) => {
+    const parsed = idempotencyKeyHeader.safeParse(
+      req.headers["x-idempotency-key"],
+    );
+
+    if (!parsed.success) {
+      throw new BadRequestError("Invalid idempotency key");
+    }
+
+    await this.stock.release(parsed.data);
+
+    res.status(200).json({ released: true });
+  };
 }

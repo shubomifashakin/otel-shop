@@ -5,9 +5,10 @@
 // npm workspace, and will never be instrumented. The only span that belongs to
 // us is the client span the payment service emits when it calls in here.
 //
-// It accepts a charge, answers 202 with a reference, and then posts the outcome
-// back to the callback url. The outcome is random by default, and forceable with
-// an `x-simulate` header so a specific trace can be reproduced on demand.
+// It either declines a charge outright, or answers 202 with a reference and then
+// posts the outcome back to the callback url. Those two moments are controlled
+// separately by INITIALIZE_ACCEPT_RATE and WEBHOOK_SUCCESS_RATE, so either can
+// be forced to always or never happen without affecting the other.
 import { createHmac, randomUUID } from "node:crypto";
 
 import express from "express";
@@ -15,8 +16,18 @@ import express from "express";
 const PORT = Number(process.env.PORT ?? 4000);
 const SECRET = process.env.WEBHOOK_SECRET;
 const CALLBACK_DELAY_MS = Number(process.env.CALLBACK_DELAY_MS ?? 1500);
-const SLOW_RESPONSE_MS = Number(process.env.SLOW_RESPONSE_MS ?? 8000);
-const SUCCESS_RATE = Number(process.env.SUCCESS_RATE ?? 0.8);
+// how long every accept takes to answer. this is the duration the payment
+// service's `payment.initialize` span measures, so it is the knob to turn when
+// you want that span to be visibly slow. keep it under payment's 10s client
+// timeout or every checkout fails instead.
+const INITIALIZE_RESPONSE_DELAY_MS = Number(process.env.INITIALIZE_RESPONSE_DELAY_MS ?? 0);
+// share of charges the provider agrees to take on at all. a refusal here is
+// synchronous: payment compensates inside the checkout request and nothing is
+// ever published, so kafka and the consumers never see it.
+const INITIALIZE_ACCEPT_RATE = Number(process.env.INITIALIZE_ACCEPT_RATE ?? 0.8);
+// share of accepted charges that go on to succeed. a failure here arrives later,
+// on the callback, and is settled through the webhook and kafka.
+const WEBHOOK_SUCCESS_RATE = Number(process.env.WEBHOOK_SUCCESS_RATE ?? 0.8);
 
 if (!SECRET) {
   console.error("WEBHOOK_SECRET is required");
@@ -70,33 +81,18 @@ app.post("/payments", async (req, res) => {
       .json({ message: "paymentId, amount, currency and callbackUrl are required" });
   }
 
-  // success | fail | slow | timeout | reject, else random
-  const simulate = req.headers["x-simulate"];
+  // every request waits this long before answering, which is the duration
+  // payment's `payment.initialize` span measures
+  if (INITIALIZE_RESPONSE_DELAY_MS > 0) await sleep(INITIALIZE_RESPONSE_DELAY_MS);
 
-  // never answers: this is what payment's request timeout is for, and it leaves
-  // the payment pending rather than failed, because the charge may have landed
-  if (simulate === "timeout") {
-    console.log(`payment ${paymentId} simulating a timeout`);
-    return;
+  // the provider refuses the charge outright, so nothing is ever accepted
+  if (Math.random() >= INITIALIZE_ACCEPT_RATE) {
+    console.log(`payment ${paymentId} declined at initialization`);
+    return res.status(502).json({ message: "provider declined the charge" });
   }
-
-  // the provider refuses the request outright, so nothing is charged
-  if (simulate === "reject") {
-    console.log(`payment ${paymentId} rejected`);
-    return res.status(502).json({ message: "provider declined the request" });
-  }
-
-  if (simulate === "slow") await sleep(SLOW_RESPONSE_MS);
 
   const reference = `prov_${randomUUID().slice(0, 12)}`;
-  const outcome =
-    simulate === "success"
-      ? "succeeded"
-      : simulate === "fail"
-        ? "failed"
-        : Math.random() < SUCCESS_RATE
-          ? "succeeded"
-          : "failed";
+  const outcome = Math.random() < WEBHOOK_SUCCESS_RATE ? "succeeded" : "failed";
 
   console.log(`payment ${paymentId} accepted as ${reference}, will be ${outcome}`);
 

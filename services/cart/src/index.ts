@@ -1,3 +1,4 @@
+import { sdk } from "./instrumentation.js";
 import { bootstrap } from "./bootstrap.js";
 import { makeError } from "@shop/utils";
 
@@ -39,6 +40,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
     await paymentsConsumer.disconnect();
     await redis.close();
+    await sdk.shutdown();
 
     clearTimeout(forceExit);
 

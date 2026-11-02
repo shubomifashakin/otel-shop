@@ -61,4 +61,9 @@ USER node
 
 EXPOSE 3003
 
-CMD ["node", "services/products/dist/index.js"]
+#  required because otel was initially designed around commonjs.
+#  we use esm here and we need to use this flag for kafka autoinstrumentation to work properly
+# read more about it here: https://github.com/open-telemetry/opentelemetry-js/blob/main/doc/esm-support.md
+# node prints an ExperimentalWarning for this flag on startup, thats expected. the suggested example has also been deprecated
+CMD ["node", "--experimental-loader=@opentelemetry/instrumentation/hook.mjs", "services/products/dist/index.js"]
+

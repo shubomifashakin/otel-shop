@@ -15,6 +15,17 @@ import {
   ProductsPort,
   PaymentsRepoPort,
 } from "../infrastructure/ports/index.js";
+import { checkouts, tracer } from "../telemetry/index.js";
+import { Exception, SpanStatusCode } from "@opentelemetry/api";
+
+type CheckoutResult =
+  | "initiated"
+  | "empty_cart"
+  | "reserve_rejected"
+  | "pricing_rejected"
+  | "provider_rejected"
+  | "unexpected_error"
+  | "dependency_error";
 
 export type CartItem = {
   name: string;
@@ -105,90 +116,171 @@ export class PaymentsService {
       };
     }
 
-    // get the items in the users cart
-    const items = await this.cartsService.findOneByUserId(userId);
+    let outcome: CheckoutResult = "unexpected_error";
 
-    if (!items.success) {
-      this.logger.error("Failed to get cart items", items.error);
+    try {
+      // get the items in the users cart
+      const items = await this.cartsService.findOneByUserId(userId);
 
-      throw new ServiceUnavailableError();
-    }
+      if (!items.success) {
+        this.logger.error("Failed to get cart items", items.error);
+        outcome = "dependency_error";
 
-    if (!items.data.length) {
-      throw new NotFoundError("Cart is empty");
-    }
-
-    // get the actual pricing of each item in the users cart
-    const updatedPricing = await this.priceCart(items.data);
-
-    const reserveList = items.data.map((item) => {
-      return { id: item.productId, qty: item.quantity };
-    });
-
-    // reserve the items for the user
-    const reserved = await this.productsService.reserve(
-      reserveList,
-      idempotencyKey,
-    );
-
-    if (!reserved.success) {
-      if (
-        reserved.error instanceof UnprocessableError ||
-        reserved.error instanceof NotFoundError
-      ) {
-        this.logger.debug("Failed to reserve products", reserved.error);
-
-        throw reserved.error;
+        throw new ServiceUnavailableError();
       }
 
-      this.logger.error("Failed to reserve products", reserved.error);
+      if (!items.data.length) {
+        outcome = "empty_cart";
 
-      throw new ServiceUnavailableError();
-    }
-
-    // record the payment (its pending atp)
-    const paymentRecorded = await this.paymentRepo.create({
-      userId,
-      idempotencyKey,
-      items: updatedPricing.items,
-      amount: updatedPricing.amount,
-      currency: updatedPricing.currency,
-    });
-
-    // initiate payment
-    const accepted = await this.provider.pay({
-      paymentId: paymentRecorded.id,
-      amount: paymentRecorded.amount,
-      currency: paymentRecorded.currency,
-      idempotencyKey,
-    });
-
-    if (!accepted.success) {
-      this.logger.error("Provider rejected the charge", accepted.error);
-
-      const released = await this.productsService.release(idempotencyKey);
-
-      if (!released.success) {
-        this.logger.error("Failed to release reserved stock", released.error);
+        throw new NotFoundError("Cart is empty");
       }
 
-      await this.paymentRepo.markStatus(paymentRecorded.id, "failed", null);
+      // get the actual pricing of each item in the users cart
+      // priceCart calls products once per item, so if a user has 20 items in the cart it would have 20 GET requests
+      // this n+1 is deliberate, its here to be found in a trace.
+      // note it fans out with Promise.all, so the spans overlap instead of forming the classic
+      // staircase and the total duration still looks healthy. what gives it away is the span
+      // count scaling with cart.items.count, which is why that attribute is set below.
+      // the fix would be a batch endpoint on products.
+      // compare it with the reserve call further down, same service, but the whole list in a single POST.
+      const updatedPricing = await tracer.startActiveSpan(
+        "cart.price",
+        async (span) => {
+          span.setAttribute("cart.items.count", items.data.length);
 
-      throw new ServiceUnavailableError("Could not take the payment");
+          try {
+            const updatedPricing = await this.priceCart(items.data);
+
+            span.setAttribute("cart.amount", updatedPricing.amount);
+
+            return updatedPricing;
+          } catch (err: unknown) {
+            outcome = "dependency_error";
+
+            span.recordException(err as Exception);
+
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message:
+                err instanceof Error ? err.message : "failed to price the cart",
+            });
+
+            throw err;
+          } finally {
+            span.end();
+          }
+        },
+      );
+
+      const reserveList = items.data.map((item) => {
+        return { id: item.productId, qty: item.quantity };
+      });
+
+      // reserve the items for the user
+      const reserved = await this.productsService.reserve(
+        reserveList,
+        idempotencyKey,
+      );
+
+      if (!reserved.success) {
+        if (
+          reserved.error instanceof UnprocessableError ||
+          reserved.error instanceof NotFoundError
+        ) {
+          outcome = "reserve_rejected";
+
+          this.logger.debug("Failed to reserve products", reserved.error);
+
+          throw reserved.error;
+        }
+
+        outcome = "dependency_error";
+
+        this.logger.error("Failed to reserve products", reserved.error);
+
+        throw new ServiceUnavailableError();
+      }
+
+      // record the payment (its pending atp)
+      const paymentRecorded = await this.paymentRepo.create({
+        userId,
+        idempotencyKey,
+        items: updatedPricing.items,
+        amount: updatedPricing.amount,
+        currency: updatedPricing.currency,
+      });
+
+      // initiate payment
+      // track how long the payment initialization took
+      // basically helps us track how long our payment provider took to respond
+      // you can configure the initialization delay in environment variables of the payment provider
+      const accepted = await tracer.startActiveSpan(
+        "payment.initialize",
+        async (span) => {
+          span.setAttributes({
+            "payment.id": paymentRecorded.id,
+            "payment.amount": paymentRecorded.amount,
+            "payment.currency": paymentRecorded.currency,
+            "payment.provider": "example-provider",
+          });
+
+          try {
+            const accepted = await this.provider.pay({
+              paymentId: paymentRecorded.id,
+              amount: paymentRecorded.amount,
+              currency: paymentRecorded.currency,
+              idempotencyKey,
+            });
+
+            if (!accepted.success) {
+              // you should be able to link to this log line from this span
+              this.logger.error("Provider rejected the charge", accepted.error);
+
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: accepted.error.message,
+              });
+              span.recordException(accepted.error);
+            }
+
+            return accepted;
+          } finally {
+            span.end();
+          }
+        },
+      );
+
+      if (!accepted.success) {
+        outcome = "provider_rejected";
+
+        const released = await this.productsService.release(idempotencyKey);
+
+        if (!released.success) {
+          this.logger.error("Failed to release reserved stock", released.error);
+        }
+
+        await this.paymentRepo.markStatus(paymentRecorded.id, "failed", null);
+
+        throw new ServiceUnavailableError("Could not take the payment");
+      }
+
+      // add the payment reference to the payment record
+      await this.paymentRepo.attachProviderReference(
+        paymentRecorded.id,
+        accepted.data.providerReference,
+      );
+
+      outcome = "initiated";
+
+      return {
+        id: paymentRecorded.id,
+        status: paymentRecorded.status,
+        amount: paymentRecorded.amount,
+        currency: paymentRecorded.currency,
+      };
+    } finally {
+      checkouts.add(1, { outcome });
     }
-
-    // add the payment reference to the payment record
-    await this.paymentRepo.attachProviderReference(
-      paymentRecorded.id,
-      accepted.data.providerReference,
-    );
-
-    return {
-      id: paymentRecorded.id,
-      status: paymentRecorded.status,
-      amount: paymentRecorded.amount,
-      currency: paymentRecorded.currency,
-    };
   }
 
   async getPayments(userId: string, cursor?: string) {

@@ -11,7 +11,7 @@
 ### 1. Sign up
 # The password rules are strict: 8+ chars, one lowercase, one uppercase, one
 # symbol. The phone must be a valid international number.
-
+# You should see a trace show up the spans across 2 services (gateway and auth)
 POST {{host}}/auth/signup
 Content-Type: application/json
 
@@ -26,7 +26,7 @@ Content-Type: application/json
 
 ### 2. Log in
 # Sets `access_token` as an httpOnly cookie. Every request below relies on it.
-
+# You should see a trace that spans across 2 services (gateway and auth)
 POST {{host}}/auth/login
 Content-Type: application/json
 
@@ -39,25 +39,26 @@ Content-Type: application/json
 ### 3. Browse the catalogue
 # Public, no auth. 20 per page, with a `cursor` holding the last id when there
 # is more to fetch.
-
+# You should see a trace that spans across 2 services (gateway and products)
 # @name catalogue
 GET {{host}}/products
 
 
 ### 4. Next page
 # Takes the cursor straight from the response above rather than hardcoding it.
-
+# Same as above
 GET {{host}}/products?cursor={{catalogue.response.body.$.cursor}}
 
 
 ### 5. One product
 # Note the price: minor units, as a string. 172600 is ₦1,726.00.
-
+# same as above
 GET {{host}}/products/2
 
 
 ### 6. Add it to the cart
-
+# You should see a trace that spans across 3 services (gateway, cart and products)
+# Since this is also a protected endpoint, you may also see auth appear sometimes
 POST {{host}}/cart/items
 Content-Type: application/json
 
@@ -69,13 +70,15 @@ Content-Type: application/json
 
 ### 7. See the cart
 # Returns the items as a bare array, newest page first with an optional cursor.
-
+# You should see a trace that spans across 2 services (gateway and cart)
+# You could also see auth appear sometimes
 GET {{host}}/cart
 
 
 ### 8. Change a quantity
 # Replaces the quantity
-
+# You should see a trace that spans across 2 services (gateway and cart)
+# You could also see auth appear sometimes
 PATCH {{host}}/cart/items/2
 Content-Type: application/json
 
@@ -87,18 +90,34 @@ Content-Type: application/json
 ### 9. Check out
 # No body. The `x-idempotency-key` header is required: send the same key twice
 # and you get the same payment back rather than a second charge.
-# The payment is `pending`, the payment provider reports the outcome to our webhook
-# that is what settles the stock and clears the cart
-# Configure the success rate and callback delay of the payment provider to your taste
-
+# The payment comes back `pending`. The provider reports the outcome to our
+# webhook a moment later, and that is what settles the stock and clears the cart.
+# Tune it with INITIALIZE_ACCEPT_RATE, WEBHOOK_SUCCESS_RATE,
+# INITIALIZE_RESPONSE_DELAY_MS and CALLBACK_DELAY_MS on the payment provider.
+#
+# This request traces across gateway, products, cart and payments. Auth shows up
+# too whenever the gateway's jwks cache hs expired.
+#
+# The webhook that follows is its own trace, and it does NOT include the gateway:
+# the provider posts straight to payment on the compose network, which is exactly
+# why that endpoint verifies an HMAC signature of its own.
+#
+# There are three outcomes, and each has a different shape:
+#  - declined up front (INITIALIZE_ACCEPT_RATE=0) — no webhook at all. this request
+#    itself returns 503, and payment releases the stock inside it. nothing on kafka
+#  - accepted, then failed (WEBHOOK_SUCCESS_RATE=0) — 201 here, then a webhook trace
+#    across payments and products (by kafka, to release the stock)
+#  - succeeded — 201 here, then a webhook trace across payments, products (by
+#    kafka, to settle the stock) and cart (by kafka, to clear the users cart)
 POST {{host}}/payments/checkout
 x-idempotency-key: reader-checkout-1
 
 
 ### 10. Payment history
 # Poll this after a moment and the status will have moved to `succeeded` or
-# `failed`. The provider fails about 20% of the time.
-
+# `failed`. 
+# It should span across 2 services (gateway and payments). 
+# auth also, if the jwk cache has expired
 GET {{host}}/payments
 
 

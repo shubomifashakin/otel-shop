@@ -4,6 +4,7 @@ import { RequestHandler } from "express";
 
 import { LoggerPort } from "@shop/logger";
 import { UnauthorizedError } from "@shop/types";
+import { webhookVerifications } from "../telemetry/metrics.js";
 
 export function createWebhookSignatureMiddleware(
   logger: LoggerPort,
@@ -17,6 +18,8 @@ export function createWebhookSignatureMiddleware(
         path: req.originalUrl,
       });
 
+      webhookVerifications.add(1, { outcome: "missing_signature" });
+
       throw new UnauthorizedError();
     }
 
@@ -24,6 +27,8 @@ export function createWebhookSignatureMiddleware(
       logger.error("Webhook raw body was not captured", {
         path: req.originalUrl,
       });
+
+      webhookVerifications.add(1, { outcome: "no_raw_body" });
 
       throw new UnauthorizedError();
     }
@@ -43,8 +48,12 @@ export function createWebhookSignatureMiddleware(
         path: req.originalUrl,
       });
 
+      webhookVerifications.add(1, { outcome: "mismatch" });
+
       throw new UnauthorizedError();
     }
+
+    webhookVerifications.add(1, { outcome: "valid" });
 
     next();
   };

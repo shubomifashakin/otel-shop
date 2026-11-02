@@ -67,4 +67,4 @@ USER node
 
 EXPOSE 3002
 
-CMD ["node", "services/cart/dist/index.js"]
+CMD ["node", "--experimental-loader=@opentelemetry/instrumentation/hook.mjs","services/cart/dist/index.js"]

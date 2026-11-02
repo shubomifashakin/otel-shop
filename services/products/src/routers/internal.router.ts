@@ -11,6 +11,7 @@ export function createInternalRouter(
   router.use(internalAuthMiddleware);
 
   router.post("/stock/reserve", controller.reserve);
+  router.post("/stock/release", controller.release);
 
   return router;
 }

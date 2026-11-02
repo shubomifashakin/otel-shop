@@ -1,3 +1,4 @@
+import { sdk } from "./instrumentation.js";
 import { bootstrap } from "./bootstrap.js";
 import { makeError } from "@shop/utils";
 
@@ -41,6 +42,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     await sequelize.close();
     await redis.close();
     await kafkaProducer.disconnect();
+    await sdk.shutdown();
 
     clearTimeout(forceExit);
 

@@ -5,10 +5,11 @@ observability. It exists to be instrumented, so the interesting parts are the
 seams between services: an HTTP checkout that spans four of them, and a Kafka
 settlement path where a trace has to survive a queue hop.
 
-**The application is not instrumented yet.** That is the point. The services
-are built so the next stage has something real to observe. The observability
-backends are already up and wired together, waiting to receive it — and there
-is a generator below that proves they work before a single span is written.
+**All five services are instrumented.** Traces, metrics and logs leave every
+service over OTLP, through Alloy, into Tempo, Prometheus and Loki. Run a
+checkout and you get one trace across four services, a second trace for the
+provider's webhook, and the Kafka hop stitched to it by context propagated in
+the message headers.
 
 ## Scope: the services, not the infrastructure
 
@@ -34,8 +35,8 @@ collect.
 | ----- | -------------------------------------------------------------------------------- | -------- |
 | 1     | Build the services                                                               | **done** |
 | 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done** |
-| 3     | Instrument the application                                                       | next     |
-| 4     | Sampling — head in the application, tail in Alloy                                |          |
+| 3     | Instrument the application                                                       | **done** |
+| 4     | Sampling — head in the application, tail in Alloy                                | next     |
 | 5     | Grafana as code — dashboards, contact points, notification policies, alert rules |          |
 
 ## Running it
@@ -110,9 +111,13 @@ that use them run inside the compose network.
 
 ### Confirming it works
 
-Since the application isn't instrumented yet, there is nothing to look at. I added
-a generator to confirm the setup works. It's behind a compose profile, so it
-never starts on a normal `up`:
+The quickest check is to run a checkout from [`api.http`](./api.http) and look
+for it in Tempo. If nothing shows up, the generator below tells you whether the
+problem is the application or the pipeline underneath it — it sends telemetry to
+Alloy without involving any service, so if its output lands and yours doesn't,
+the backends are fine and the instrumentation is the thing to look at.
+
+It's behind a compose profile, so it never starts on a normal `up`:
 
 ```sh
 # traces
@@ -177,14 +182,23 @@ accepts.
 
 ### Making payments fail
 
-The fake provider decides each outcome at random, so failures happen on their
-own about one checkout in five. To make them deterministic, two optional
-variables in `.env`:
+The fake provider decides at random, so failures happen on their own without any
+configuration. To make them deterministic, four optional variables in `.env`:
 
 ```sh
-SUCCESS_RATE=0        # 0 fails every payment, 1 succeeds every payment
-CALLBACK_DELAY_MS=5000  # how long before the outcome arrives (default 1500)
+INITIALIZE_ACCEPT_RATE=1        # share of charges the provider accepts at all (default 0.8)
+INITIALIZE_RESPONSE_DELAY_MS=2000  # how long it takes to answer a charge (default 2000)
+WEBHOOK_SUCCESS_RATE=0          # share of accepted charges that then succeed (default 0.8)
+CALLBACK_DELAY_MS=5000          # how long before the webhook arrives (default 1500)
 ```
+
+The two delays are different moments and show up in different places.
+`INITIALIZE_RESPONSE_DELAY_MS` is how long `POST /payments` takes to answer, so it is the
+duration payment's `payment.initialize` span measures — turn it up and the
+checkout trace gets visibly wider.
+`CALLBACK_DELAY_MS` is how long it takes for the payment provider to send a response
+to the `POST /webhooks/payments`
+Keep `INITIALIZE_RESPONSE_DELAY_MS` under payment's 10s client timeout or every checkout fails.
 
 Then restart just the provider:
 
@@ -192,11 +206,35 @@ Then restart just the provider:
 docker compose up -d --no-deps payment-provider
 ```
 
-A failed payment is worth watching because it exercises the compensating path:
-products releases the reserved stock, the cart is left alone so you can retry,
-and the payment row ends `failed`. Stretching `CALLBACK_DELAY_MS` makes the
-pending window long enough to watch a reservation sit in `reserved` before
-anything settles it — useful once there are traces to look at.
+A payment can fail at two separate moments, and each has its own rate so you can
+force one without touching the other.
+
+- **Declined at initialization** (`INITIALIZE_ACCEPT_RATE`) — the provider
+  answers 502, so payment releases the stock and marks the row `failed` in the
+  same request, synchronously, then answers 503. Nothing is published, so Kafka
+  and the consumers never see it.
+- **Accepted, then failed on the callback** (`WEBHOOK_SUCCESS_RATE`) — payment
+  answers 201 with a `pending` row, and the compensation happens later, through
+  the webhook and Kafka, with products releasing the stock in its consumer.
+
+Both are worth looking at precisely because they produce such different traces:
+the first is one connected trace ending in an error, the second is a successful
+trace plus a separate webhook trace arriving seconds later.
+
+So to exercise one path at a time:
+
+```sh
+# every charge declined up front, nothing reaches kafka
+INITIALIZE_ACCEPT_RATE=0
+
+# every charge accepted and then failed on the webhook callback
+INITIALIZE_ACCEPT_RATE=1
+WEBHOOK_SUCCESS_RATE=0
+
+# every checkout succeeds end to end
+INITIALIZE_ACCEPT_RATE=1
+WEBHOOK_SUCCESS_RATE=1
+```
 
 ## The services
 
@@ -282,9 +320,6 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
 docker compose exec products-postgres psql -U postgres -d ecommerce-products-db \
   -c "SELECT status, count(*) FROM stock_reservations GROUP BY status;"
 ```
-
-The provider fails about 20% of payments (`SUCCESS_RATE`), so a handful of
-checkouts will exercise both topics.
 
 ## Layout
 
