@@ -46,8 +46,8 @@ export async function bootstrap() {
   const globalRateLimitMiddleware = createRateLimitMiddleware(
     redisCacheAdapter,
     logger,
-    20,
-    60 * 1000,
+    parsed.RATE_LIMIT_MAX,
+    parsed.RATE_LIMIT_WINDOW_MS,
   );
   const globalErrorMiddleware = createErrorMiddleware(logger);
   const authMiddleware = createAuthMiddleware(

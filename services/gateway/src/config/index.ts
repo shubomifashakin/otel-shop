@@ -16,6 +16,12 @@ const config = z.object({
   AUTH_JWKS_URL: z.url(),
   JWT_ISSUER: z.string().nonempty(),
   JWT_AUDIENCE: z.string().nonempty(),
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60 * 1000),
 });
 
 export const parsed = config.parse(process.env);

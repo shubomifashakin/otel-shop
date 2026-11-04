@@ -180,6 +180,50 @@ For request shapes, read the zod validators in each service's
 `src/validators/index.ts`. They are the only definition of what each endpoint
 accepts.
 
+### Generating load
+
+`api.http` is for reading one trace carefully. Sampling only means anything when
+there are more traces than you can read, which is what
+[`k6/scripts/load.js`](./k6/scripts/load.js) is for.
+
+```sh
+docker compose --profile load run --rm k6
+```
+
+**Raise the rate limit first.** The gateway allows 20 requests per minute per IP,
+and a load generator is a single IP, so almost every request comes back 429 and
+never reaches a service. In `.env`:
+
+```sh
+RATE_LIMIT_MAX=100000
+RATE_LIMIT_WINDOW_MS=60000
+```
+
+Then `docker compose up -d gateway` to pick it up. The script counts 429s and
+fails the run on the first one, so a forgotten limit shows up as a failed
+threshold rather than as traffic that silently never happened.
+
+Three scenarios run at once, and the mix is deliberate:
+
+| Scenario   | Default rate | What it produces                                   |
+| ---------- | ------------ | -------------------------------------------------- |
+| `browse`   | 60/min       | fast reads — the bulk of the traffic               |
+| `checkout` | 12/min       | the wide, slow trace with the N+1 and the provider |
+| `faults`   | 6/min        | one 401, one 404 and one 422 per iteration         |
+
+The faults matter as much as the successes. A tail sampling policy that keeps
+errors has nothing to demonstrate against a run of pure 200s, and the three
+errors deliberately fail at different depths: the 401 never leaves the gateway,
+the 404 reaches products, and the 422 goes all the way down to the stock
+reservation before failing.
+
+Tune it with environment variables:
+
+```sh
+docker compose --profile load run --rm \
+  -e DURATION=10m -e BROWSE_RATE=120 -e CHECKOUT_RATE=30 k6
+```
+
 ### Making payments fail
 
 The fake provider decides at random, so failures happen on their own without any
@@ -285,6 +329,14 @@ both are the point:
   `http_server_request_duration_seconds` histograms are aggregated in-process,
   before any sampler runs, so they are unaffected by sampling at any ratio.
   Exemplars do stop appearing, since those only attach to sampled spans.
+
+A ratio between 0 and 1 is harder to confirm by hand, because you need to know
+how many traces you sent before you can say what fraction survived. That is what
+the [load generator](#generating-load) is for: it starts a fixed number of
+iterations per minute regardless of how the system responds, so the denominator
+is a number you chose rather than one you have to go and measure. Run it for
+five minutes at the defaults and you sent 300 browse traces, set
+`TRACE_RATIO=0.1` and Tempo should hold roughly thirty of them.
 
 ## The services
 

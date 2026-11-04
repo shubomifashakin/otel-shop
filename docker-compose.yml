@@ -351,6 +351,8 @@ services:
       JWT_AUDIENCE: shop-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local # you should see this as an attribute/property on your logs, metrics etc
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
       # every service reads the same variable, but only the ones that start
       # traces actually use it. the gateway is the entrypoint for all user
       # traffic, so this is the thing that decides what fraction of those traces
@@ -498,6 +500,22 @@ services:
       alloy:
         condition: service_healthy
     restart: "no"
+
+  k6:
+    image: grafana/k6:2.3.0
+    mem_limit: 512m
+    command: run /scripts/load.js
+    restart: no
+    volumes:
+      - ./k6/scripts:/scripts:ro
+    profiles:
+      - load
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://gateway:3000
+      DURATION: ${K6_DURATION:-5m}
 
 volumes:
   redis_data:
