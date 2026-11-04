@@ -159,6 +159,7 @@ services:
       JWT_PRIVATE_KEY_BASE64: ${JWT_PRIVATE_KEY_BASE64:?generate one, see README}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
+      TRACE_RATIO: ${TRACE_RATIO:-1}
     depends_on:
       auth-postgres:
         condition: service_healthy
@@ -196,6 +197,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
+      TRACE_RATIO: ${TRACE_RATIO:-1}
     depends_on:
       products-postgres:
         condition: service_healthy
@@ -240,6 +242,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
+      TRACE_RATIO: ${TRACE_RATIO:-1}
     depends_on:
       redis:
         condition: service_healthy
@@ -290,6 +293,10 @@ services:
       KAFKA_BROKERS: kafka:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local
+      # the webhook arrives from the provider with no traceparent, so payment
+      # starts a fresh trace for it. this is the only place other than gateway service
+      # where the traceIdRatioBasedSampler would be used (and its just for webhooks recieved)
+      TRACE_RATIO: ${TRACE_RATIO:-1}
     depends_on:
       payment-postgres:
         condition: service_healthy
@@ -344,6 +351,11 @@ services:
       JWT_AUDIENCE: shop-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local # you should see this as an attribute/property on your logs, metrics etc
+      # every service reads the same variable, but only the ones that start
+      # traces actually use it. the gateway is the entrypoint for all user
+      # traffic, so this is the thing that decides what fraction of those traces
+      # survive. all downstream services inherits the decision via ParentBasedSampler
+      TRACE_RATIO: ${TRACE_RATIO:-1}
     depends_on:
       redis:
         condition: service_healthy

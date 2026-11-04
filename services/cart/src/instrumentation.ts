@@ -14,8 +14,15 @@ import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchLogRecordProcessor } from "@opentelemetry/sdk-logs";
+import {
+  ParentBasedSampler,
+  TraceIdRatioBasedSampler,
+} from "@opentelemetry/sdk-trace";
 
 dotenv.config();
+
+const parsedTraceRatio = Number.parseFloat(process.env.TRACE_RATIO ?? "1");
+const traceRatio = Number.isFinite(parsedTraceRatio) ? parsedTraceRatio : 1;
 
 export const sdk = new NodeSDK({
   autoDetectResources: true,
@@ -70,6 +77,13 @@ export const sdk = new NodeSDK({
   ),
 
   resourceDetectors: [containerDetector, envDetector],
+
+  // HEAD BASED SAMPLING
+  // for spans with a parent it would respect the sampling decisions and our configured sampler would not run
+  // but for spans without a parent (root spans) it would run the TraceIdRatioBasedSampler we have configured
+  sampler: new ParentBasedSampler({
+    root: new TraceIdRatioBasedSampler(traceRatio),
+  }),
 });
 
 sdk.start();

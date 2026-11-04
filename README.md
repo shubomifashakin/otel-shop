@@ -31,13 +31,13 @@ collect.
 
 ## Status
 
-| Stage | What                                                                             | State    |
-| ----- | -------------------------------------------------------------------------------- | -------- |
-| 1     | Build the services                                                               | **done** |
-| 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done** |
-| 3     | Instrument the application                                                       | **done** |
-| 4     | Sampling — head in the application, tail in Alloy                                | next     |
-| 5     | Grafana as code — dashboards, contact points, notification policies, alert rules |          |
+| Stage | What                                                                             | State       |
+| ----- | -------------------------------------------------------------------------------- | ----------- |
+| 1     | Build the services                                                               | **done**    |
+| 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done**    |
+| 3     | Instrument the application                                                       | **done**    |
+| 4     | Sampling — head in the application (`04a`), tail in Alloy (`04b`)                | in progress |
+| 5     | Grafana as code — dashboards, contact points, notification policies, alert rules |             |
 
 ## Running it
 
@@ -235,6 +235,56 @@ WEBHOOK_SUCCESS_RATE=0
 INITIALIZE_ACCEPT_RATE=1
 WEBHOOK_SUCCESS_RATE=1
 ```
+
+## Sampling
+
+### Head Sampling
+
+Every service runs the same head sampler: a `TraceIdRatioBasedSampler` wrapped in
+a `ParentBasedSampler`. One variable controls all five:
+
+```sh
+TRACE_RATIO=0.1   # keep 10% of traces (default 1, keep everything)
+```
+
+It is read once at startup, compose needs to recreate the services
+
+```sh
+docker compose up -d
+```
+
+**Only two services actually uuse it tho.** `ParentBasedSampler` consults the
+ratio for root spans only; a span with a parent inherits whatever the parent
+decided. That basically means:
+
+- **gateway** — every user request enters through the gateway, so this is what decides the fate
+  of all browsing and checkout traces
+- **payment** — the provider's webhook arrives with no `traceparent` (the fake
+  provider is not instrumented), so payment starts a fresh trace for it
+
+auth, cart and products never see root spans. Their requests alwyas come from the gateway
+so the trace context is always propagated to them. Because of that, `TRACE_RATIO` has no
+effect on any of those, because `ParentBasedSampler` always goes with whatever decision the
+parent decided `(i.e the gateway)`, if their parent was dropped, they would be dropped, and if it
+was not, then you should see it appear in tempo. The moment any of these servcies start doing some work
+that is independent of the gateway `(e.g like a cron job or something)` then it would
+begin producing root spans and the `TRACE_RATIO` would be used there, but we have none of that
+in this codebase, but it's something you can try for yourself.
+
+### Watching it work
+
+Set `TRACE_RATIO=0`, recreate, then drive some traffic from
+[`api.http`](./api.http). Nothing should reach tempo. Two things should still happen, and
+both are the point:
+
+- **Loki still has your logs, with `trace_id` on every line.** A dropped span is
+  still _created_ — it has a real trace id, it just is not recorded or exported.
+  So the log keeps its link but the link does not lead anywehre since the traces were dropped.
+  This is the seam you get whenever logs are kept at 100% and traces are not.
+- **Prometheus keeps counting.** `payments_checkouts_total` and the
+  `http_server_request_duration_seconds` histograms are aggregated in-process,
+  before any sampler runs, so they are unaffected by sampling at any ratio.
+  Exemplars do stop appearing, since those only attach to sampled spans.
 
 ## The services
 
