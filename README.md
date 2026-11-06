@@ -36,8 +36,8 @@ collect.
 | 1     | Build the services                                                               | **done**    |
 | 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done**    |
 | 3     | Instrument the application                                                       | **done**    |
-| 4     | Sampling — head in the application (`04a`), tail in Alloy (`04b`)                | in progress |
-| 5     | Grafana as code — dashboards, contact points, notification policies, alert rules |             |
+| 4     | Sampling — head in the application (`04a`), tail in Alloy (`04b`)                | **done**    |
+| 5     | Grafana as code — dashboards, contact points, notification policies, alert rules | next        |
 
 ## Running it
 
@@ -337,6 +337,107 @@ iterations per minute regardless of how the system responds, so the denominator
 is a number you chose rather than one you have to go and measure. Run it for
 five minutes at the defaults and you sent 300 browse traces, set
 `TRACE_RATIO=0.1` and Tempo should hold roughly thirty of them.
+
+> **Put `TRACE_RATIO` back to `1` before going further.** Everything below this
+> point assumes it. Head sampling is unconditional and happens at the source, so
+> anything it drops never reaches the tail sampler at all and a policy that says
+> "keep every error" cannot keep an error it was never sent. Leave the ratio at
+> `0.1` and you are not sampling 10% and then filtering, you are filtering 10% of
+> your traffic and blindly discarding the other 90%, errors included. The two
+> compound, and the tail policies are the ones doing the useful work.
+
+### Tail Sampling
+
+Head sampling decides at the moment a trace starts, before anything has happened.
+That is cheap and it is why the decision propagates so cleanly, but it operates blindly.
+A trace that was going to fail is thrown away with the same indifference as one
+that was going to succeed, because at the point of the decision neither had
+happened yet.
+
+Tail sampling waits for the trace to be complete before making a decision,
+It contains the duration, the outcome and every attribute attached. That
+is how you keep every error while throwing away most of the traffic.
+
+It lives in Alloy, in [`config.alloy`](./backend_configs/config.alloy), because
+Alloy is the one place every span passes through.
+
+```hcl
+decision_wait = "30s"
+```
+
+This is a **timer, not a completeness check**. Alloy cannot know how many spans a
+trace will have, so it starts a timer when the first one arrives and evaluates
+whatever it has when the timer runs out. If a timer that is too short and a span
+arrives after that, the decision misses it entirely. An error at second 35 against
+a 30s window is never seen, and the trace was already judged healthy and dropped. Too long and
+every in-flight trace sits in memory that whole time.
+
+Four policies are in place:
+
+| Policy       | Type            | What it does                                   |
+| ------------ | --------------- | ---------------------------------------------- |
+| `drop-noise` | `drop`          | throws away health check and metrics endpoints |
+| `errors`     | `status_code`   | keeps every trace containing an `ERROR` span   |
+| `slow`       | `latency`       | keeps every trace over 2s, measured end to end |
+| `baseline`   | `probabilistic` | keeps 10% of everything else                   |
+
+**How they combine:** every policy is evaluated and the votes are tallied. A
+`drop` vote always wins. Otherwise a single keep vote is enough. **Nothing voting
+keep means the trace is discarded**, the default is drop, so a trace that matches
+no policy is gone forever. The `baseline` policy exists for exactly that reason: without
+it, a perfectly healthy checkout would never reach Tempo and you would have no
+example of a working trace to look at.
+
+#### The thing that will surprise you
+
+**A 4xx is not an error** — not on the span that served it. OpenTelemetry marks a
+SERVER span as `ERROR` only at `>= 500`, because a 404 is the server working
+correctly: it was asked for something that does not exist and said so. CLIENT
+spans use `>= 400`, because from the caller's side the request failed.
+
+So a 404 produces an error on the _caller's_ span, not the callee's. Request a
+product that does not exist and the gateway's client span is flagged while
+products' own server span stays `UNSET`. Both are in the same trace, so the
+`errors` policy keeps it — but for a reason that is one step removed from where
+you would look.
+
+The case where this bites: **an unauthorised request is invisible to the `errors`
+policy.** The gateway rejects it at the edge, so nothing is proxied and there is
+no client span, and the server span is 401 which is not an error. Nothing in that
+trace is flagged. It survives only if `baseline` happens to pick it.
+
+The second source of `ERROR` is a thrown exception — the Express instrumentation
+flags any handler that throws. That is why the 404 shows a red `request handler`
+span too: products' service throws `NotFoundError`. The gateway's auth middleware
+answers with `res.status(401)` and returns instead of throwing, so nothing is
+flagged. Thrown errors are visible, handled ones are not.
+
+#### What tail sampling broke, and how it was fixed
+
+Tempo used to derive span metrics and service graphs from the traces it received.
+That stops working the moment you tail sample, and the failure is worse than
+losing precision.
+
+Uniform sampling would only make the numbers small — keep 10% of everything and
+every rate is 10× low, but the shape survives. Tail sampling is deliberately
+**not** uniform: it keeps 100% of errors and 10% of successes. Metrics derived
+from what survives would read an error rate of roughly 50% when reality is 9%.
+Not imprecise, actively wrong, and wrong in the direction that looks like an
+outage.
+
+So generation moved upstream of the sampler. Tempo's `metrics_generator` is gone,
+and `otelcol.connector.spanmetrics` and `otelcol.connector.servicegraph` now sit
+on the receiver's output alongside the tail sampler rather than behind it. They
+see every span; only the trace path is sampled. **Count first, then throw spans
+away.**
+
+The metric names are unchanged, so nothing downstream noticed. Two settings exist
+purely to keep it that way: `namespace = "traces.spanmetrics"` on the span metrics
+connector, because its default would have produced `traces_span_metrics_*`, and a
+corrected `virtual_node_peer_attributes` on the service graph connector, because
+the defaults look for `db.name` and `db.system` while the current semantic
+conventions emit `db.namespace` and `db.system.name` — leaving them alone would
+have quietly dropped Postgres and Redis off the graph entirely.
 
 ## The services
 

@@ -18,8 +18,177 @@ otelcol.receiver.otlp "default" {
 	output {
 		metrics = [otelcol.processor.batch.default.input]
 		logs    = [otelcol.processor.batch.default.input]
-		traces  = [otelcol.processor.batch.default.input]
+
+		// send traces to the span metrics generator
+		// send traces to the tail sampler
+		// send traces to the service graph processor
+		traces  = [
+		 otelcol.connector.spanmetrics.default.input,
+		 otelcol.processor.tail_sampling.default.input, 
+		 otelcol.connector.servicegraph.default.input,
+		]
 	}
+}
+
+// SPAN METRICS
+// derives RED metrics (requests, errors, duration) from every span that passes
+// through.
+// read directly from the recievver instead of the tail sampler because this needs
+// all spans in order to generate accurate results instead of working off a sampled stream
+otelcol.connector.spanmetrics "default" {
+	// tempo's metrics_generator used to emit these as `traces_spanmetrics_*`, and
+	// both the tempo datasource and the readme still name that metric. the default
+	// namespace here is "traces.span.metrics", which would land in prometheus as
+	// traces_span_metrics_calls_total and silently break those references, so we
+	// pin it to the name they already expect.
+	namespace = "traces.spanmetrics"
+
+	// required block, and it needs exactly one of `explicit` or `exponential`.
+	// seconds matches http_server_request_duration_seconds from the sdk, so every
+	// duration in prometheus is in the same unit.
+	histogram {
+		unit = "s"
+
+		explicit {
+			// the defaults bunch up under 10ms and stop at 15s. these are spread for
+			// what this app actually does: sub-millisecond redis reads at one end,
+			// checkouts waiting on the fake provider at the other.
+			buckets = ["5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2s", "5s", "10s", "30s"]
+		}
+	}
+
+	metrics_flush_interval = "15s"
+
+	//  basically a limit on the amount of unqiue dimension combinations we can have
+	// any new combination that comes in after this limit is reached collapses into 
+	// a series tagged otel.metric.overflow=true
+	aggregation_cardinality_limit = 1000
+
+	// lets a data point carry the trace id of a span it was computed from, which
+	// is what the prometheus datasource's exemplarTraceIdDestinations turns into
+	// a jump to tempo.
+	exemplars {
+		enabled = true
+	}
+
+	output {
+		metrics = [otelcol.exporter.otlphttp.prometheus.input]
+	}
+}
+
+// SERVICE GRAPH
+// builds the topology by pairing the two sides of every call: a CLIENT span with
+// the SERVER span it caused, or a PRODUCER span with its CONSUMER. each pair
+// becomes an edge, and the edge carries its own request count, failure count and
+// latency. that is what the node graph in grafana renders.
+//
+// this is the only thing that can tell us which hop is slow. a trace says the
+// checkout took 3 seconds, the edge says 2.4 of them were payment -> provider.
+otelcol.connector.servicegraph "default" {
+	// when something makes a call to a service that is not instrumented
+	// use these attributes to determine who it swas trying to talk to
+	// invent a node with that name
+	virtual_node_peer_attributes = ["peer.service", "server.address"]
+
+	// uses these attributes to determine which edge gets tagged with connection_type="database"
+	// the name of the node would also be whatever value this attribute holds
+	database_name_attributes = ["db.namespace", "db.name"]
+
+	// adds a virtual_node label basically saying which side of the eddge wasnt instrumented.
+	// can be of value `server` meaning whatever was being called wasnt instrumented
+	// or client, meaning whatever we used to call a service wasnt insytumented
+	virtual_node_extra_label = true
+
+	store {
+		// how long one side of a call waits in memory for its other half. the
+		// default is 2s, 
+		// for example, how long a client side request would wait for its server side response and vice versa
+		ttl = "10s"
+
+		// how many half-finished pairs we will hold. 
+		max_items = 5000
+	}
+
+	// matched to the span metrics buckets so every duration in prometheus shares
+	// the same boundaries and the two can be compared directly.
+	latency_histogram_buckets = ["5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2s", "5s", "10s", "30s"]
+
+	metrics_flush_interval = "15s"
+
+	output {
+		metrics = [otelcol.exporter.otlphttp.prometheus.input]
+	}
+}
+
+// TAIL SAMPLING
+// samples traces and forwards them to the tempo instance
+// policies are basically "OR", any KEEP vote wins, except `drop`, 
+// which always overrides whatever decision was made.
+// nothing voting KEEP means the trace is discarded, the default is DROP.
+// so basically here it would check the trace received against all 4 policies
+// if we had a trace that took >2000ms but it had url.path=/health, it would be dropped
+otelcol.processor.tail_sampling "default" {
+	// how long alloy would wait until all spans for a trace are received
+	// before making a decision based on the policies.
+	// if its too short, a span that arrives after the decisiin has already been amde misses it
+	// if its too long then every span basically sits int he ram until the timer expires,
+	// delaying how long a trace takes before its sent to tempo (or whatever trace backend is used eg jaeger)
+	decision_wait = "30s"
+
+	// drop any trace that matches this policy
+	policy {
+		name = "drop-noise"
+		type = "drop"
+
+		drop {
+			// this drops traces which have url.path equal to any of the specified values
+			drop_sub_policy {
+				name = "noise-paths"
+				type = "string_attribute"
+
+				string_attribute {
+					key    = "url.path"
+					values = ["/health", "/healthz", "/ready", "/live", "/metrics"]
+				}
+			}
+		}
+    }
+
+	// keep any trace that has a span with status ERROR
+	// if a trace has a single span with the status code of ERROR, it would be kept
+	policy {
+		name = "errors"
+    	type = "status_code"
+
+		status_code {
+			status_codes = ["ERROR"]
+		}
+	}
+
+	// keep any trace that took more than 2000milliseconds (the whole trace)
+	policy {
+		name = "slow"
+		type = "latency"
+
+		latency {
+		 threshold_ms = 2000
+		}
+    }
+
+	// keep 10% of all traces
+	policy {
+    	name = "baseline"
+    	type = "probabilistic"
+
+		probabilistic {
+			sampling_percentage = 10
+		}
+	}
+
+	// send the traces to the batch processor
+	output {
+    	traces  = [otelcol.processor.batch.default.input]
+  }
 }
 
 // batches the telemetry data so as to reduce calls to our backends
