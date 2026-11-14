@@ -9,3 +9,4 @@ storage:
   tsdb:
     retention:
       time: 14d
+    out_of_order_time_window: 10m
