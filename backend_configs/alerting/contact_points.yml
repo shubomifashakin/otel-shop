@@ -1,0 +1,70 @@
+apiVersion: 1
+
+# you can configure this to whatever contact point you wan tto use
+# this is meant to serve as an example
+contactPoints:
+  - orgId: 1
+    name: Payments On Call
+    receivers:
+      - uid: payments-discord
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+          use_embed_description: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Products On Call
+    receivers:
+      - uid: products-discord
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+          use_embed_description: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Carts On Call
+    receivers:
+      - uid: carts-discord
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+          use_embed_description: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Auth On Call
+    receivers:
+      - uid: auth-discord
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+          use_embed_description: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Gateway On Call
+    receivers:
+      - uid: gateway-discord
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+          use_embed_description: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Default Discord
+    receivers:
+      - uid: default-discord
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+          use_embed_description: false
+        disableResolveMessage: false

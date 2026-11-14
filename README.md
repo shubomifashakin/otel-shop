@@ -31,17 +31,17 @@ collect.
 
 ## Status
 
-| Stage | What                                                                             | State       |
-| ----- | -------------------------------------------------------------------------------- | ----------- |
-| 1     | Build the services                                                               | **done**    |
-| 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done**    |
-| 3     | Instrument the application                                                       | **done**    |
-| 4     | Sampling — head in the application (`04a`), tail in Alloy (`04b`)                | **done**    |
-| 5     | Grafana as code — dashboards, contact points, notification policies, alert rules | next        |
+| Stage | What                                                                             | State    |
+| ----- | -------------------------------------------------------------------------------- | -------- |
+| 1     | Build the services                                                               | **done** |
+| 2     | Observability backends (Loki, Prometheus, Tempo, Alloy, Grafana)                 | **done** |
+| 3     | Instrument the application                                                       | **done** |
+| 4     | Sampling — head in the application (`04a`), tail in Alloy (`04b`)                | **done** |
+| 5     | Grafana as code — dashboards, contact points, notification policies, alert rules | **done** |
 
 ## Running it
 
-Requires Docker and Node 24 (`.nvmrc`). Three secrets have no defaults, so
+Requires Docker and Node 24 (`.nvmrc`). Four values have no defaults, so
 compose refuses to start without them. Create a `.env` beside
 `docker-compose.yml`:
 
@@ -52,14 +52,20 @@ JWT_PRIVATE_KEY_BASE64=...
 PAYMENT_WEBHOOK_SECRET=...
 # shared between payment, cart and products, for service-to-service calls
 INTERNAL_API_TOKEN=...
+# where grafana sends alerts. any discord channel will do
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
-Generate the last two with `openssl rand -hex 32`. For the key:
+Generate the second and third with `openssl rand -hex 32`. For the key:
 
 ```sh
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
   | openssl base64 -A
 ```
+
+The Discord webhook is only read by the provisioned contact points, so alerting
+is the only thing that breaks without a real one but compose still refuses to
+start, so put _something_ there even if you never intend to look at it.
 
 > On Windows, write `.env` as UTF-8 without a BOM. PowerShell's `>>` and
 > `Out-File` default to encodings that compose silently fails to parse, which
@@ -203,13 +209,14 @@ Then `docker compose up -d gateway` to pick it up. The script counts 429s and
 fails the run on the first one, so a forgotten limit shows up as a failed
 threshold rather than as traffic that silently never happened.
 
-Three scenarios run at once, and the mix is deliberate:
+Four scenarios run at once, and the mix is deliberate:
 
-| Scenario   | Default rate | What it produces                                   |
-| ---------- | ------------ | -------------------------------------------------- |
-| `browse`   | 60/min       | fast reads — the bulk of the traffic               |
-| `checkout` | 12/min       | the wide, slow trace with the N+1 and the provider |
-| `faults`   | 6/min        | one 401, one 404 and one 422 per iteration         |
+| Scenario     | Default rate | What it produces                                   |
+| ------------ | ------------ | -------------------------------------------------- |
+| `browse`     | 60/min       | fast reads — the bulk of the traffic               |
+| `checkout`   | 12/min       | the wide, slow trace with the N+1 and the provider |
+| `faults`     | 6/min        | one 401, one 404 and one 422 per iteration         |
+| `bad_logins` | 300/min      | wrong passwords and unknown emails                 |
 
 The faults matter as much as the successes. A tail sampling policy that keeps
 errors has nothing to demonstrate against a run of pure 200s, and the three
@@ -217,11 +224,33 @@ errors deliberately fail at different depths: the 401 never leaves the gateway,
 the 404 reaches products, and the 422 goes all the way down to the stock
 reservation before failing.
 
-Tune it with environment variables:
+`bad_logins` produces both halves of a credential attack, because auth treats
+them differently: a wrong password is a 401 (`outcome="invalid_credentials"`)
+while an unregistered email is a 404 (`outcome="unknown_user"`).
+
+#### Running one scenario at a time
+
+Useful when you want to drive a single alert without the rest of the traffic in
+the way. `--scenario` takes one name, or several comma separated.
+
+```sh
+docker compose --profile load run --rm k6 run --scenario browse /scripts/load.js
+docker compose --profile load run --rm k6 run --scenario checkout /scripts/load.js
+docker compose --profile load run --rm k6 run --scenario faults /scripts/load.js
+docker compose --profile load run --rm k6 run --scenario bad_logins /scripts/load.js
+```
+
+Note that `--scenario` drops thresholds belonging to the scenarios you left
+out, so a filtered run reports on less than a full one.
+
+Tune the rates and duration with environment variables:
 
 ```sh
 docker compose --profile load run --rm \
   -e DURATION=10m -e BROWSE_RATE=120 -e CHECKOUT_RATE=30 k6
+
+docker compose --profile load run --rm -e BAD_LOGIN_RATE=600 \
+  k6 run --scenario bad_logins /scripts/load.js
 ```
 
 ### Making payments fail

@@ -1,0 +1,42 @@
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    # the fallback. anything matching no route below lands here.
+    receiver: Default Discord
+
+    # two alerts share a group only if ALL of these match
+    group_by:
+      - alertname
+      - job
+      - severity
+
+    # how long to wait for other alerts from the same group before sending out notifications
+    group_wait: 30s
+
+    # how often to check for changes and send out notifications if something had changed for that group
+    group_interval: 5m
+
+    # how long to wait before sending out reminder notifications for an alert that is still firing and  received no changes
+    repeat_interval: 4h
+
+    routes:
+      - receiver: Payments On Call
+        object_matchers:
+          - [job, =, payment]
+
+      - receiver: Products On Call
+        object_matchers:
+          - [job, =, products]
+
+      - receiver: Carts On Call
+        object_matchers:
+          - [job, =, cart]
+
+      - receiver: Auth On Call
+        object_matchers:
+          - [job, =, auth]
+
+      - receiver: Gateway On Call
+        object_matchers:
+          - [job, =, gateway]

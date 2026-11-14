@@ -351,7 +351,7 @@ services:
       JWT_AUDIENCE: shop-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
       OTEL_RESOURCE_ATTRIBUTES: service.version=1.0.0,deployment.environment.name=local # you should see this as an attribute/property on your logs, metrics etc
-      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-1000000}
       RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
       # every service reads the same variable, but only the ones that start
       # traces actually use it. the gateway is the entrypoint for all user
@@ -470,6 +470,9 @@ services:
     mem_limit: 1g
     volumes:
       - ./backend_configs/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./backend_configs/alerting:/etc/grafana/provisioning/alerting:ro
+      - ./backend_configs/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ./backend_configs/dashboards:/etc/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     healthcheck:
       test:
@@ -488,6 +491,8 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_DATABASE_HIGH_AVAILABILITY=false
+        # it uses a single discord for every contact point
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:?set DISCORD_WEBHOOK_URL, see README}
 
   # this generates dummy traces, metrics and logs so you can confirm the pipeline
   # works before any application is instrumented.
@@ -515,7 +520,7 @@ services:
         condition: service_healthy
     environment:
       BASE_URL: http://gateway:3000
-      DURATION: ${K6_DURATION:-5m}
+      DURATION: ${K6_DURATION:-10m}
 
 volumes:
   redis_data:
