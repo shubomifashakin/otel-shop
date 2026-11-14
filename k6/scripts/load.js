@@ -13,6 +13,10 @@ const BROWSE_RATE = Number(__ENV.BROWSE_RATE || 60);
 const CHECKOUT_RATE = Number(__ENV.CHECKOUT_RATE || 12);
 const FAULT_RATE = Number(__ENV.FAULT_RATE || 6);
 
+// failed logins, per minute. this is the one you turn up to trip the brute
+// force alert: 300 gives you five a second, which no real user produces.
+const BAD_LOGIN_RATE = Number(__ENV.BAD_LOGIN_RATE || 300);
+
 const PASSWORD = "Observe!123";
 
 const PRODUCT_COUNT = 300;
@@ -52,6 +56,19 @@ export const options = {
       preAllocatedVUs: 3,
       maxVUs: 10,
       exec: "faults",
+    },
+
+    // split out from `faults` so it has its own rate knob. the login alert is
+    // about volume, so you want to turn this up on its own without flooding
+    // everything else at the same time.
+    bad_logins: {
+      executor: "constant-arrival-rate",
+      rate: BAD_LOGIN_RATE,
+      timeUnit: "1m",
+      duration: DURATION,
+      preAllocatedVUs: 5,
+      maxVUs: 20,
+      exec: "badLogins",
     },
   },
 
@@ -233,6 +250,62 @@ export function checkout() {
       tags: { kind: "checkout", name: "GET /payments" },
     }),
   );
+}
+
+export function badLogins() {
+  // ensureSession signs this vu up, so we have a real account to guess
+  // against. the failed attempts below never set a cookie, so they leave the
+  // vu's own session alone.
+  const { email } = ensureSession();
+
+  const wrongPassword = track(
+    http.post(
+      `${BASE_URL}/auth/login`,
+      JSON.stringify({ email, password: "BlaBlaBlA!9" }),
+      {
+        headers: JSON_HEADERS,
+        tags: { kind: "fault", name: "POST /auth/login (wrong password)" },
+      },
+    ),
+  );
+
+  if (
+    !check(wrongPassword, {
+      "wrong password rejected": (r) => r.status === 401,
+    })
+  ) {
+    console.warn(
+      `expected 401 from the wrong password, got ${wrongPassword.status}: ${wrongPassword.body}`,
+    );
+  }
+
+  faultsGenerated.add(1, { fault: "invalid_credentials" });
+
+  sleep(randomInt(1, 4) / 10);
+
+  const unknownUser = track(
+    http.post(
+      `${BASE_URL}/auth/login`,
+      JSON.stringify({
+        email: `k6-nobody-${randomInt(1, 1000000)}@otel-shop.test`,
+        password: PASSWORD,
+      }),
+      {
+        headers: JSON_HEADERS,
+        tags: { kind: "fault", name: "POST /auth/login (unknown user)" },
+      },
+    ),
+  );
+
+  if (
+    !check(unknownUser, { "unknown user rejected": (r) => r.status === 404 })
+  ) {
+    console.warn(
+      `expected 404 from the unknown user, got ${unknownUser.status}: ${unknownUser.body}`,
+    );
+  }
+
+  faultsGenerated.add(1, { fault: "unknown_user" });
 }
 
 export function faults() {
