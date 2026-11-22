@@ -1,0 +1,975 @@
+{
+  "info": {
+    "name": "otel-shop",
+    "description": "Drive the otel-shop API through the gateway on http://localhost:3000.\n\nEverything goes through the gateway, because it is the only application service that publishes a port. The other four talk to each other on the compose network.\n\n## How to use this\n\nRun the folders in order, top to bottom. Each one leaves the system in the state the next one expects.\n\n1. **Health** confirms the gateway is up.\n2. **Auth** creates an account and logs in. Login sets an httpOnly `access_token` cookie, and Postman's cookie jar holds on to it for every request after that, so there is no token to copy anywhere.\n3. **Products** browses the catalogue and stores a real product id in a collection variable.\n4. **Cart** adds, reads, updates and removes items.\n5. **Checkout** starts a payment and watches it settle.\n6. **Errors worth seeing** triggers the failures that are interesting to look at in traces.\n\nLog out sits at the bottom of the Auth folder. Leave it until you are finished, because everything else needs the session it ends.\n\n## Things worth knowing\n\n- Auth is cookie based, not `Authorization: Bearer`. Do not disable the cookie jar.\n- Checkout is asynchronous. It answers `202 Accepted` with the payment still `pending`, and the fake provider calls back about 1.5 seconds later. Give it a moment before you read the payment back.\n- The catalogue is seeded with 300 products, and every product whose id is 1, 11, 21 and so on is out of stock. That is deliberate, and the Errors folder uses it.\n- The gateway rate limits to 20 requests per minute per IP. Clicking through this collection by hand will not hit that, but a loop will.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "reader@otel-shop.test",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "Observe!123",
+      "type": "string"
+    },
+    {
+      "key": "firstName",
+      "value": "Ada",
+      "type": "string"
+    },
+    {
+      "key": "lastName",
+      "value": "Lovelace",
+      "type": "string"
+    },
+    {
+      "key": "phone",
+      "value": "+2348012345678",
+      "type": "string"
+    },
+    {
+      "key": "productId",
+      "value": "2",
+      "type": "string"
+    },
+    {
+      "key": "outOfStockProductId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "productsCursor",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "idempotencyKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "description": "One request to confirm the stack is actually up before you blame anything else.",
+      "item": [
+        {
+          "name": "Gateway health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": ["{{baseUrl}}"],
+              "path": ["healthz"]
+            },
+            "description": "The gateway answers this one itself, before the rate limiter and before any proxying. If this fails, nothing else in the collection will work, so check `docker compose ps` first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"gateway is up\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql(\"ok\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Auth",
+      "description": "Sign up once, then log in. The gateway proxies all of these straight through to the auth service.\n\nLog out is here too, because it belongs with the rest of auth, but leave it alone until you are finished. It kills your session, and every folder after this one needs it.",
+      "item": [
+        {
+          "name": "Sign up",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\",\n  \"phone\": \"{{phone}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/signup",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "signup"]
+            },
+            "description": "Creates the account. It does not log you in, so follow it with Log in.\n\nThe password rules are strict: at least 8 characters, with a lowercase letter, an uppercase letter and a special character. The phone has to be a valid international number.\n\nSending this a second time returns a conflict, which is expected. The test below accepts that, so you can re-run the folder without editing anything. If you want a clean account, change the `email` collection variable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"account exists\", function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([201, 409]);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 409) {",
+                  "  console.log(\"account already existed, carry on to Log in\");",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Log in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "The response body is only `{ \"message\": \"success\" }`. The useful part is the `Set-Cookie` header, which carries an httpOnly `access_token`.\n\nPostman stores that in its cookie jar against `localhost` and attaches it to the rest of the collection for you. Nothing to copy, nothing to paste.\n\nIf later requests come back `401`, open the Cookies link under the Send button and check the cookie is still there and has not expired."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"logged in\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"an access_token cookie came back\", function () {",
+                  "  var setCookie = pm.response.headers.get(\"Set-Cookie\") || \"\";",
+                  "  pm.expect(setCookie).to.include(\"access_token\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Log out",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            },
+            "description": "Send this when you are done, not now. Everything below this folder needs the session it ends.\n\nIt clears the cookie and blacklists the token's id in Redis, so the token is dead even though it has not expired yet.\n\nThat blacklist check is why every authenticated request through the gateway touches Redis, which is a detail worth remembering when you start looking at where your latency goes.\n\nIt also answers `200` when you are already logged out, so there is no way to get an error out of it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"logged out\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Products",
+      "description": "The catalogue is public, so these work whether or not you logged in. Paging is cursor based on the product id.",
+      "item": [
+        {
+          "name": "List products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": ["{{baseUrl}}"],
+              "path": ["products"]
+            },
+            "description": "Returns 20 products at a time, as `{ hasNextPage, products, cursor }`.\n\nThe test script picks the first product with stock on hand and saves its id to the `productId` collection variable, so the Cart folder works against something real rather than a hardcoded guess."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns a page of products\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().products).to.be.an(\"array\").that.is.not.empty;",
+                  "});",
+                  "",
+                  "var body = pm.response.json();",
+                  "",
+                  "var inStock = body.products.find(function (p) {",
+                  "  return p.quantity > 0;",
+                  "});",
+                  "",
+                  "if (inStock) {",
+                  "  pm.collectionVariables.set(\"productId\", inStock.id);",
+                  "  console.log(\"using product \" + inStock.id + \": \" + inStock.name);",
+                  "}",
+                  "",
+                  "if (body.cursor) {",
+                  "  pm.collectionVariables.set(\"productsCursor\", body.cursor);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "List the next page",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?cursor={{productsCursor}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["products"],
+              "query": [
+                {
+                  "key": "cursor",
+                  "value": "{{productsCursor}}"
+                }
+              ]
+            },
+            "description": "Pass the `cursor` from the previous page to get the next one. List products saved it for you.\n\nKeep sending this to walk the catalogue. `hasNextPage` goes false on the last page, and `cursor` is then absent."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns the next page\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var body = pm.response.json();",
+                  "",
+                  "if (body.cursor) {",
+                  "  pm.collectionVariables.set(\"productsCursor\", body.cursor);",
+                  "} else {",
+                  "  console.log(\"that was the last page\");",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Get one product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/{{productId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", "{{productId}}"]
+            },
+            "description": "Reads a single product.\n\nThis one is worth sending twice. The first call misses the cache and hits Postgres, the second is served from Redis, and once the services are instrumented the two traces look visibly different."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns the product\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"productId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Cart",
+      "description": "Every cart route needs the login cookie. The cart lives in Redis only, keyed by user, and it calls the products service to resolve each item's name and price as you add it.\n\nNote that adding to the cart does not check stock. That happens at checkout.\n\nRun this folder top to bottom. The last request puts an item back so the Checkout folder has something to pay for.",
+      "item": [
+        {
+          "name": "Add an item",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": {{productId}},\n  \"quantity\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart", "items"]
+            },
+            "description": "Adds a product to your cart. Sending it again for the same product adds to the existing line rather than creating a second one.\n\nA single line caps at 100 units and a cart caps at 50 distinct products."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"item added\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Get the cart",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart"]
+            },
+            "description": "Returns the lines in your cart, each with the name, price and currency that were resolved from the products service when you added it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cart has at least one line\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Update a quantity",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items/{{productId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart", "items", "{{productId}}"]
+            },
+            "description": "Sets the line to an absolute quantity, it does not add to it. The product has to already be in the cart, otherwise you get a `404`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"quantity updated\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Remove an item",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart/items/{{productId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart", "items", "{{productId}}"]
+            },
+            "description": "Drops one line. Removing the last line clears the whole cart key out of Redis."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"item removed\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Clear the cart",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart"]
+            },
+            "description": "Empties the cart. This is also what the cart service does to itself when it consumes a `payment.succeeded` event from Kafka, which is the step you can watch at the end of the Checkout folder."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cart cleared\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Add the item back",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": {{productId}},\n  \"quantity\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart", "items"]
+            },
+            "description": "You just emptied the cart, and checkout on an empty cart returns a `404`. This puts an item back so the next folder has something to pay for."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cart is ready for checkout\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Checkout",
+      "description": "This is the interesting one, and the request the article keeps coming back to.\n\nOne call fans out across four services and a message broker: payment reads your cart, re-prices it against the products service, reserves the stock, writes a pending payment row, and calls the fake provider. The provider answers immediately and then calls payment back on a webhook about 1.5 seconds later. Payment publishes the outcome to Kafka, where products either marks the stock sold or releases it, and cart empties itself on success.\n\nSo the `202` you get back is not the end of the story. Wait a moment, then read the payment back.",
+      "item": [
+        {
+          "name": "Start a checkout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-idempotency-key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/checkout",
+              "host": ["{{baseUrl}}"],
+              "path": ["payments", "checkout"]
+            },
+            "description": "No body. The cart is the input, and the `x-idempotency-key` header is required.\n\nThe pre-request script generates a fresh key every time you send this, so each send starts a new payment. The next request shows what happens when the key repeats.\n\nYou get `202 Accepted` with the payment still `pending`. Roughly 80% of payments succeed, which is tunable with `SUCCESS_RATE`, so expect a failure every few runs. That is intentional, since a system that never fails is no use for learning to debug one."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(",
+                  "  \"idempotencyKey\",",
+                  "  pm.variables.replaceIn(\"{{$guid}}\")",
+                  ");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"checkout accepted\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "var body = pm.response.json();",
+                  "",
+                  "pm.test(\"payment starts out pending\", function () {",
+                  "  pm.expect(body.status).to.eql(\"pending\");",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"paymentId\", body.id);",
+                  "",
+                  "console.log(",
+                  "  \"payment \" + body.id + \" for \" + body.amount + \" \" + body.currency +",
+                  "  \". give the provider a second or two, then read it back.\"",
+                  ");"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Start a checkout with the same key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-idempotency-key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/checkout",
+              "host": ["{{baseUrl}}"],
+              "path": ["payments", "checkout"]
+            },
+            "description": "Same key as the request before it, because this one does not generate a new one.\n\nYou get the same payment id back rather than a second charge. Worth sending so you can see how short the trace is compared to the first checkout: it returns on the idempotency lookup and never touches the cart, the products service or the provider."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"same payment came back\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "  pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"paymentId\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "List your payments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/payments",
+              "host": ["{{baseUrl}}"],
+              "path": ["payments"]
+            },
+            "description": "Your payments, newest first, 20 at a time, paged on a `cursor` that is a payment id.\n\nSend this a couple of seconds after a checkout and the payment you just started should have moved off `pending` to `succeeded` or `failed`. If it is still pending, the provider callback has not landed yet. Send it again.\n\nIf it stays pending, something is wrong with the webhook rather than with the payment, and `docker compose logs payment payment-provider` is the place to look."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"payments came back\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var id = pm.collectionVariables.get(\"paymentId\");",
+                  "var found = pm.response.json().payments.find(function (p) {",
+                  "  return p.id === id;",
+                  "});",
+                  "",
+                  "if (!found) {",
+                  "  console.log(\"payment \" + id + \" is not on this page\");",
+                  "} else if (found.status === \"pending\") {",
+                  "  console.log(\"still pending, the provider has not called back yet. send this again.\");",
+                  "} else {",
+                  "  console.log(\"payment \" + id + \" settled as \" + found.status);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Read the cart after checkout",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart"]
+            },
+            "description": "If the payment succeeded, this is empty, and nothing in the request chain you sent emptied it. The cart service did that to itself after consuming `payment.succeeded` from Kafka.\n\nThat gap is the point. The HTTP response you got back from checkout tells you nothing about whether this part ever happened, which is exactly the kind of thing you need tracing for.\n\nIf the payment failed, the cart is still full, and the stock that was reserved has been released."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cart came back\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Errors worth seeing",
+      "description": "Deliberate failures. Each one shows up differently once the services are instrumented, and they are the fastest way to get something red on a dashboard without waiting for a real problem.\n\nThe out of stock sequence at the end leaves your cart dirty, so it finishes by clearing it.",
+      "item": [
+        {
+          "name": "Unauthorized",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://127.0.0.1:3000/cart",
+              "protocol": "http",
+              "host": ["127", "0", "0", "1"],
+              "port": "3000",
+              "path": ["cart"]
+            },
+            "description": "A `401` from the gateway, which rejects this before it ever reaches the cart service.\n\nNote the host: `127.0.0.1` rather than `localhost`. That is not a typo. Postman keys its cookie jar by domain, and your login cookie was stored against `localhost`, so addressing the same gateway by IP is the simplest way to send an unauthenticated request without clearing cookies and having to log in again."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"rejected without a cookie\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Invalid request body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"not-an-email\",\n  \"password\": \"short\",\n  \"firstName\": \"A\",\n  \"lastName\": \"B\",\n  \"phone\": \"12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/signup",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "signup"]
+            },
+            "description": "Every field here is wrong, so the response lists a detail per field. Validation failures like this are worth separating from real faults when you start looking at error rates, because a `400` means the caller was wrong and a `500` means you were."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"rejected as a bad request\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "console.log(pm.response.json());"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Product that does not exist",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", "999999"]
+            },
+            "description": "A `404` that travels the whole way to Postgres before anyone can say so. The id is valid, it just is not there, so the products service has to miss the cache and then miss the database."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"not found\", function () {",
+                  "  pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Quantity above the cap",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": {{productId}},\n  \"quantity\": 101\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart", "items"]
+            },
+            "description": "A cart line caps at 100 units, so this is rejected by validation before the cart service calls anything else. Your cart is untouched."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"rejected as a bad request\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Add an out of stock product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": {{outOfStockProductId}},\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart", "items"]
+            },
+            "description": "This succeeds, which is the surprising part. The cart does not check stock, it only resolves the product so it can store a name and a price.\n\nThe seed data puts every tenth product out of stock, starting at id 1, so ids 1, 11, 21 and so on all have zero quantity.\n\nThe failure comes one request later."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"added, despite having no stock\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Checkout with no stock",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-idempotency-key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/checkout",
+              "host": ["{{baseUrl}}"],
+              "path": ["payments", "checkout"]
+            },
+            "description": "A `422`, raised by the products service when payment tries to reserve the stock.\n\nThis is the most useful failure in the collection. The error surfaces at the gateway, but it was raised two services away, and no payment row and no provider call ever happened. Reading that off the logs alone is miserable. Reading it off one trace is obvious."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(",
+                  "  \"idempotencyKey\",",
+                  "  pm.variables.replaceIn(\"{{$guid}}\")",
+                  ");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"rejected for stock\", function () {",
+                  "  pm.response.to.have.status(422);",
+                  "});",
+                  "",
+                  "console.log(pm.response.json());"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Clean up the cart",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": ["{{baseUrl}}"],
+              "path": ["cart"]
+            },
+            "description": "Empties the cart so the out of stock item does not block the next checkout you try."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cart cleared\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}
